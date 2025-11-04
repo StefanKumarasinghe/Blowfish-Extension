@@ -1,4 +1,4 @@
-# Advanced Web Security Scanner Pro - Chrome Extension
+# Advanced Web Security Scanner Pro - Chrome & Edge Extension
 
 A comprehensive web vulnerability scanner that runs directly in your browser to detect security issues and potential threats on any website.
 
@@ -52,8 +52,8 @@ A comprehensive web vulnerability scanner that runs directly in your browser to 
    - `scanner.js`
    - `popup.html`
    - `popup.js`
-4. **Create the required icon files** (see Icon Requirements below)
-5. Follow Method 1 steps 3-6
+
+
 
 ## Icon Requirements
 
@@ -200,11 +200,6 @@ SecurityScannerPro/
 3. Use `addIssue()` to report vulnerabilities
 4. Test thoroughly on various websites
 
-### Customizing UI
-- Modify `popup.html` for layout changes
-- Update `popup.js` for functionality changes
-- Adjust CSS in `popup.html` for styling
-
 ## Contributing
 
 This extension is based on the Advanced Web Security Scanner Pro userscript. Contributions are welcome:
@@ -228,17 +223,4 @@ This extension is based on the Advanced Web Security Scanner Pro userscript. Con
 
 ## License
 
-This project is open source. Feel free to modify and distribute according to your needs.
-
-## Support
-
-For issues, questions, or feature requests:
-
-1. Check the troubleshooting section above
-2. Look at `create_icons.html` for icon creation help
-3. Review the browser console for specific error messages
-4. Create an issue in the project repository
-
----
-
-**Advanced Web Security Scanner Pro** - Professional-grade security analysis for everyone. # secure-browser-extension
+This project is open source. Feel free to modify and distribute according to your needs. This was developed by Stefan Ralph Kumarasinghe
