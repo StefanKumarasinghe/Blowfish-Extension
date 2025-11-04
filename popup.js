@@ -1,3 +1,4 @@
+import {FEEDBACK_API_URL} from './api.js';
 
 document.addEventListener('DOMContentLoaded', async () => {
     const statusIndicator = document.getElementById('statusIndicator');
@@ -845,7 +846,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
 
-    const FEEDBACK_API_URL = 'https://2adtnzyegia6xltcma7srbfmwa0wmptl.lambda-url.us-east-1.on.aws'; 
     const communityConfidence = document.getElementById('communityConfidence');
     const meterFill = document.getElementById('meterFill');
     const meterPercentage = document.getElementById('meterPercentage');
