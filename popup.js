@@ -1,349 +1,515 @@
-import {FEEDBACK_API_URL} from './api.js';
+const FEEDBACK_API_URL = 'https://t5bc2asx5vnslwg27zpah7w5pi0mqkoq.lambda-url.ap-southeast-2.on.aws';
+const TAGS_API_BASE = 'https://api.blowfish-security.com/v1/tags';
+const MAX_WHITELIST_SITES = 50;
+const SCAN_TIMEOUT_ATTEMPTS = 90;
+const SCAN_PROGRESS_INTERVAL = 1000;
 
-document.addEventListener('DOMContentLoaded', async () => {
-    const statusIndicator = document.getElementById('statusIndicator');
-    const statusText = document.getElementById('statusText');
-    const domainInfo = document.getElementById('domainInfo');
-    const scanButton = document.getElementById('scanButton');
-    const content = document.getElementById('content');
-    const resultsSummary = document.getElementById('resultsSummary');
-    const issuesList = document.getElementById('issuesList');
-    const noIssues = document.getElementById('noIssues');
-    const scanUrl = document.getElementById('scanUrl');
-    const autoScanToggle = document.getElementById('autoScanToggle');
-    const notificationsToggle = document.getElementById('notificationsToggle');
-    const highlightToggle = document.getElementById('highlightToggle');
-    const hideBubbleToggle = document.getElementById('hideBubbleToggle');
+class PopupManager {
+    constructor() {
+        this.elements = {};
+        this.state = {
+            currentTab: null,
+            currentWhitelist: [],
+            currentHardeningLevel: 'off',
+            highlightedIssues: new Set(),
+            currentWebsiteTags: {},
+            selectedQuickTags: new Set()
+        };
+        this.initElements();
+    }
 
+    initElements() {
+        const elementIds = [
+            'statusIndicator', 'statusText', 'domainInfo', 'scanButton', 'content',
+            'resultsSummary', 'issuesList', 'noIssues', 'scanUrl',
+            'autoScanToggle', 'notificationsToggle', 'themeToggle', 'highlightToggle', 'hideBubbleToggle',
+            'addToWhitelistBtn', 'whitelistItems', 'noWhitelistItems', 'clearWhitelistBtn',
+            'hardeningStatus', 'hardeningMegaBtn', 'hardeningMediumBtn',
+            'hardeningLowBtn', 'hardeningOffBtn', 'hardeningInfo', 'hardeningInfoTitle',
+            'hardeningInfoDesc', 'hardeningInfoDetails', 'hardeningStats', 'blockedElementsCount',
+            'communityConfidence', 'meterFill', 'meterPercentage', 'safeVotes', 'unsafeVotes',
+            'safeFeedbackBtn', 'unsafeFeedbackBtn', 'feedbackStatus', 'clearHighlightsBtn',
+            'criticalCount', 'highCount', 'mediumCount', 'lowCount'
+        ];
 
-    const addToWhitelistBtn = document.getElementById('addToWhitelistBtn');
-    const whitelistItems = document.getElementById('whitelistItems');
-    const noWhitelistItems = document.getElementById('noWhitelistItems');
-    const clearWhitelistBtn = document.getElementById('clearWhitelistBtn');
+        elementIds.forEach(id => {
+            this.elements[id] = document.getElementById(id);
+        });
+    }
 
-   
-    const openProxyBtn = document.getElementById('openProxyBtn');
-
-   
-    const hardeningStatus = document.getElementById('hardeningStatus');
-    const hardeningMegaBtn = document.getElementById('hardeningMegaBtn');
-    const hardeningMediumBtn = document.getElementById('hardeningMediumBtn');
-    const hardeningLowBtn = document.getElementById('hardeningLowBtn');
-    const hardeningOffBtn = document.getElementById('hardeningOffBtn');
-    const hardeningInfo = document.getElementById('hardeningInfo');
-    const hardeningInfoTitle = document.getElementById('hardeningInfoTitle');
-    const hardeningInfoDesc = document.getElementById('hardeningInfoDesc');
-    const hardeningInfoDetails = document.getElementById('hardeningInfoDetails');
-    const hardeningStats = document.getElementById('hardeningStats');
-    const blockedElementsCount = document.getElementById('blockedElementsCount');
-
-    let highlightedIssues = new Set();
-    let currentTab = null;
-    let currentWhitelist = [];
-    let currentHardeningLevel = 'off';
-
-
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    currentTab = tab;
-    
-
-    if (currentTab && currentTab.url) {
+    async init() {
         try {
-            const url = new URL(currentTab.url);
-            domainInfo.textContent = url.hostname;
-        } catch (e) {
-            domainInfo.textContent = 'Unknown domain';
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            this.state.currentTab = tab;
+
+            this.elements.domainInfo.textContent = 'Unknown domain';
+            this.elements.statusText.textContent = 'Ready';
+
+            if (this.state.currentTab?.url) {
+                const url = new URL(this.state.currentTab.url);
+                this.elements.domainInfo.textContent = url.hostname;
+                this.elements.statusText.textContent = url.hostname;
+            }
+
+            const settings = await chrome.storage.sync.get([
+                'autoScan', 'showNotifications', 'showHighlights', 'hideBubble',
+                'whitelist', 'hardeningLevel', 'theme'
+            ]);
+
+            this.applySettings(settings);
+            this.state.currentWhitelist = settings.whitelist || [];
+            this.state.currentHardeningLevel = settings.hardeningLevel || 'off';
+
+            
+            const theme = settings.theme || 'dark';
+            this.applyTheme(theme);
+
+            this.updateHardeningUI(this.state.currentHardeningLevel);
+            this.displayWhitelist();
+            this.updateAddToWhitelistButton();
+
+            this.loadScanResults();
+            if (settings.autoScan !== false) {
+                try {
+                    const existing = await chrome.runtime.sendMessage({ type: 'GET_SCAN_RESULTS', tabId: this.state.currentTab?.id });
+                    if (!existing) await this.startManualScan();
+                } catch (e) {
+                    console.debug('Auto-scan check failed:', e);
+                }
+            }
+            this.loadCommunityStats();
+            this.loadHardeningStatus();
+
+            this.setupEventListeners();
+            this.setupRuntimeListeners();
+
+            // Ensure detailed findings/report UI are hidden by default
+            this.elements.issuesList.style.display = 'none';
+            const reportElement = document.getElementById('reportContainer');
+            if (reportElement) { reportElement.hidden = true; reportElement.innerHTML = ''; }
+
+            this.checkScannablePage();
+        } catch (error) {
+            console.error('Failed to initialize popup:', error);
         }
     }
+
+    applySettings(settings) {
+        this.elements.autoScanToggle.classList.toggle('active', settings.autoScan !== false);
+        this.elements.notificationsToggle.classList.toggle('active', settings.showNotifications !== false);
+        this.elements.highlightToggle.classList.toggle('active', settings.showHighlights !== false);
+        this.elements.hideBubbleToggle.classList.toggle('active', settings.hideBubble === true);
+    }
+
+    setupEventListeners() {
+        this.elements.scanButton.addEventListener('click', () => this.startManualScan());
+        this.elements.autoScanToggle.addEventListener('click', () => this.toggleAutoScan());
+        this.elements.notificationsToggle.addEventListener('click', () => this.toggleNotifications());
+        this.elements.highlightToggle.addEventListener('click', () => this.toggleHighlights());
+        this.elements.hideBubbleToggle.addEventListener('click', () => this.toggleHideBubble());
+        this.elements.addToWhitelistBtn.addEventListener('click', () => this.addCurrentSiteToWhitelist());
+        this.elements.clearWhitelistBtn.addEventListener('click', () => this.clearAllWhitelist());
+        this.elements.safeFeedbackBtn.addEventListener('click', () => this.submitFeedback(true));
+        this.elements.unsafeFeedbackBtn.addEventListener('click', () => this.submitFeedback(false));
+
+        this.elements.hardeningMegaBtn.addEventListener('click', () => this.setHardeningLevel('mega'));
+        this.elements.hardeningMediumBtn.addEventListener('click', () => this.setHardeningLevel('medium'));
+        this.elements.hardeningLowBtn.addEventListener('click', () => this.setHardeningLevel('low'));
+        this.elements.hardeningOffBtn.addEventListener('click', () => this.setHardeningLevel('off'));
+
+        if (this.elements.clearHighlightsBtn) {
+            this.elements.clearHighlightsBtn.addEventListener('click', () => this.clearAllHighlights());
+        }
+
+        
+        if (this.elements.themeToggle) {
+            this.elements.themeToggle.addEventListener('click', () => this.toggleTheme());
+        }
+    }
+
+    setupRuntimeListeners() {
+        chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+            if (message.type === 'SCAN_PROGRESS') {
+                const progressText = message.data.currentCheck || 'Scanning...';
+                this.updateStatus(progressText, 'scanning');
+            } else if (message.type === 'SCAN_COMPLETE') {
+                setTimeout(() => {
+                    this.loadScanResults();
+                    this.updateStatus('Scan completed', 'ready');
+                    this.elements.scanButton.disabled = false;
+                }, 500);
+            }
+            return true;
+        });
+    }
+
+    checkScannablePage() {
+        if (!this.state.currentTab || !this.canScanPage(this.state.currentTab.url)) {
+            this.updateStatus('Cannot scan this page', 'error');
+            this.elements.scanButton.disabled = true;
+
+            const warning = document.createElement('div');
+            warning.className = 'scan-warning';
+            warning.textContent = 'Security scanning is not available on Chrome internal pages';
+            this.elements.content.insertBefore(warning, this.elements.content.firstChild);
+        }
+    }
+
     
+    applyTheme(theme) {
+        const isLight = theme === 'light';
+        document.body.classList.toggle('theme-light', isLight);
+        if (this.elements.themeToggle) {
+            this.elements.themeToggle.classList.toggle('active', isLight);
+            this.elements.themeToggle.setAttribute('aria-checked', isLight ? 'true' : 'false');
+        }
+    }
 
-    const settings = await chrome.storage.sync.get([
-        'autoScan',
-        'showNotifications', 
-        'showHighlights',
-        'hideBubble',
-        'whitelist',
-        'hardeningLevel'
-    ]);
+    async toggleTheme() {
+        const isLight = document.body.classList.contains('theme-light');
+        const newTheme = isLight ? 'dark' : 'light';
+        await chrome.storage.sync.set({ theme: newTheme });
+        this.applyTheme(newTheme);
+    }
+
     
-
-    autoScanToggle.classList.toggle('active', settings.autoScan !== false);
-    notificationsToggle.classList.toggle('active', settings.showNotifications !== false);
-    highlightToggle.classList.toggle('active', settings.showHighlights !== false);
-    hideBubbleToggle.classList.toggle('active', settings.hideBubble === true);
-
-   
-    currentHardeningLevel = settings.hardeningLevel || 'off';
-    updateHardeningUI(currentHardeningLevel);
-
-
-    currentWhitelist = settings.whitelist || [];
-    displayWhitelist();
-    updateAddToWhitelistButton();
-
-
-    loadScanResults();
-    loadCommunityStats();
-
-    loadHardeningStatus();
-
-
-    scanButton.addEventListener('click', startManualScan);
-    autoScanToggle.addEventListener('click', toggleAutoScan);
-    notificationsToggle.addEventListener('click', toggleNotifications);
-    highlightToggle.addEventListener('click', toggleHighlights);
-    hideBubbleToggle.addEventListener('click', toggleHideBubble);
-    addToWhitelistBtn.addEventListener('click', addCurrentSiteToWhitelist);
-    clearWhitelistBtn.addEventListener('click', clearAllWhitelist);
-
-   
-    openProxyBtn.addEventListener('click', openViaProxy);
-
-   
-    hardeningMegaBtn.addEventListener('click', () => setHardeningLevel('mega'));
-    hardeningMediumBtn.addEventListener('click', () => setHardeningLevel('medium'));
-    hardeningLowBtn.addEventListener('click', () => setHardeningLevel('low'));
-    hardeningOffBtn.addEventListener('click', () => setHardeningLevel('off'));
-
-    const clearHighlightsBtn = document.getElementById('clearHighlightsBtn');
-    clearHighlightsBtn.addEventListener('click', clearAllHighlights);
-
-
-    async function loadScanResults() {
+    async loadScanResults() {
         try {
-            const response = await chrome.runtime.sendMessage({
-                type: 'GET_SCAN_RESULTS'
-            });
+            const response = await chrome.runtime.sendMessage({ type: 'GET_SCAN_RESULTS', tabId: this.state.currentTab?.id });
 
-            if (response && response.vulnerabilityCount !== undefined) {
-            
+            if (response && 'vulnerabilityCount' in response) {
                 if (response.error) {
-                    showScanError(response.error);
+                    this.showScanError(response.error);
                 } else {
-                    displayResults(response);
+                    this.displayResults(response);
                 }
             } else {
-            
-                showNoResults();
+                this.showNoResults();
             }
         } catch (error) {
             console.error('Failed to load scan results:', error);
-        
-            showNoResults();
+            this.showNoResults();
         }
     }
 
-
-    async function startManualScan() {
-        if (!currentTab || !canScanPage(currentTab.url)) {
-            showScanError('Cannot scan this page type');
+    async startManualScan() {
+        if (!this.state.currentTab || !this.canScanPage(this.state.currentTab.url)) {
+            this.showScanError('Cannot scan this page type');
             return;
         }
 
-        scanButton.disabled = true;
-        scanButton.textContent = 'Scanning...';
-        statusText.textContent = 'Starting scan...';
-        statusIndicator.className = 'status-indicator scanning';
-        
+        this.elements.scanButton.disabled = true;
+        this.elements.scanButton.textContent = 'Scanning...';
+        this.updateStatus('Starting scan...', 'scanning');
+
         try {
-            await chrome.runtime.sendMessage({
-                type: 'START_MANUAL_SCAN'
-            });
-            
-        
-           
-            const checkScanProgress = async () => {
-                let attempts = 0;
-                const maxAttempts = 90;
-                let lastProgressTime = Date.now();
-                let progressStalled = false;
-                
-                const progressInterval = setInterval(async () => {
-                    attempts++;
-                    
-                    try {
-                        const results = await chrome.runtime.sendMessage({
-                            type: 'GET_SCAN_RESULTS'
-                        });
-                        
-                        if (results && results.timestamp) {
-                            clearInterval(progressInterval);
-                            scanButton.disabled = false;
-                            scanButton.textContent = 'Re-scan';
-                            
-                            if (results.error) {
-                                showScanError(results.error);
-                            } else {
-                                displayResults(results);
-                            }
-                            return;
-                        }
-                        
-                       
-                        const elapsed = attempts;
-                        if (elapsed <= 15) {
-                            statusText.textContent = 'Initializing scan...';
-                        } else if (elapsed <= 30) {
-                            statusText.textContent = 'Analyzing security headers...';
-                        } else if (elapsed <= 45) {
-                            statusText.textContent = 'Checking SSL configuration...';
-                        } else if (elapsed <= 60) {
-                            statusText.textContent = 'Performing deep analysis...';
-                        } else if (elapsed <= 75) {
-                            statusText.textContent = 'Finalizing results...';
-                        } else {
-                            statusText.textContent = 'Completing scan...';
-                        }
-                        
-                       
-                        const now = Date.now();
-                        if (now - lastProgressTime > 30000) {
-                            if (!progressStalled) {
-                                progressStalled = true;
-                                statusText.textContent = 'Scan taking longer than expected...';
-                                console.log('Scan progress appears stalled, but continuing to wait');
-                            }
-                        }
-                        
-                       
-                        if (attempts >= maxAttempts) {
-                            clearInterval(progressInterval);
-                            scanButton.disabled = false;
-                            scanButton.textContent = 'Re-scan';
-                            
-                            if (progressStalled) {
-                                showScanError('Scan timeout - page may be too complex or unresponsive');
-                            } else {
-                                showScanError('Scan timeout - please try again');
-                            }
-                            statusText.textContent = 'Scan failed';
-                            statusIndicator.className = 'status-indicator issues';
-                        }
-                        
-                    } catch (error) {
-                        console.error('Error checking scan progress:', error);
-                        
-                        if (attempts >= maxAttempts) {
-                            clearInterval(progressInterval);
-                            scanButton.disabled = false;
-                            scanButton.textContent = 'Re-scan';
-                            showScanError('Scan failed - please try again');
-                            statusText.textContent = 'Scan failed';
-                            statusIndicator.className = 'status-indicator issues';
-                        }
-                    }
-                }, 1000);
-            };
-            
-            checkScanProgress();
-            
+            await chrome.runtime.sendMessage({ type: 'START_MANUAL_SCAN', tabId: this.state.currentTab?.id });
+            this.monitorScanProgress();
         } catch (error) {
             console.error('Failed to start scan:', error);
-            scanButton.disabled = false;
-            scanButton.textContent = 'Re-scan';
-            showScanError('Failed to start scan');
-            statusText.textContent = 'Scan failed';
-            statusIndicator.className = 'status-indicator issues';
+            this.elements.scanButton.disabled = false;
+            this.elements.scanButton.textContent = 'Re-scan';
+            this.showScanError('Failed to start scan');
+            this.updateStatus('Scan failed', 'error');
         }
     }
 
+    async monitorScanProgress() {
+        let attempts = 0;
+        let lastProgressTime = Date.now();
+        let progressStalled = false;
 
-    function displayResults(results) {
+        const progressInterval = setInterval(async () => {
+            attempts++;
+
+            try {
+                const results = await chrome.runtime.sendMessage({ type: 'GET_SCAN_RESULTS', tabId: this.state.currentTab?.id });
+
+                if (results?.timestamp) {
+                    clearInterval(progressInterval);
+                    this.elements.scanButton.disabled = false;
+                    this.elements.scanButton.textContent = 'Re-scan';
+
+                    if (results.error) {
+                        this.showScanError(results.error);
+                    } else {
+                        this.displayResults(results);
+                    }
+                    return;
+                }
+
+                this.updateScanProgressText(attempts);
+
+                const now = Date.now();
+                if (now - lastProgressTime > 30000) {
+                    if (!progressStalled) {
+                        progressStalled = true;
+                        this.updateStatus('Scan taking longer than expected...', 'scanning');
+                    }
+                }
+
+                if (attempts >= SCAN_TIMEOUT_ATTEMPTS) {
+                    clearInterval(progressInterval);
+                    this.elements.scanButton.disabled = false;
+                    this.elements.scanButton.textContent = 'Re-scan';
+
+                    if (progressStalled) {
+                        this.showScanError('Scan timeout - page may be too complex or unresponsive');
+                    } else {
+                        this.showScanError('Scan timeout - please try again');
+                    }
+                    this.updateStatus('Scan failed', 'error');
+                }
+
+            } catch (error) {
+                console.error('Error checking scan progress:', error);
+
+                if (attempts >= SCAN_TIMEOUT_ATTEMPTS) {
+                    clearInterval(progressInterval);
+                    this.elements.scanButton.disabled = false;
+                    this.elements.scanButton.textContent = 'Re-scan';
+                    this.showScanError('Scan failed - please try again');
+                    this.updateStatus('Scan failed', 'error');
+                }
+            }
+        }, SCAN_PROGRESS_INTERVAL);
+    }
+
+    updateScanProgressText(attempts) {
+        let statusText;
+        if (attempts <= 15) {
+            statusText = 'Initializing scan...';
+        } else if (attempts <= 30) {
+            statusText = 'Analyzing security headers...';
+        } else if (attempts <= 45) {
+            statusText = 'Checking SSL configuration...';
+        } else if (attempts <= 60) {
+            statusText = 'Performing deep analysis...';
+        } else if (attempts <= 75) {
+            statusText = 'Finalizing results...';
+        } else {
+            statusText = 'Completing scan...';
+        }
+        this.updateStatus(statusText, 'scanning');
+    }
+
+    displayResults(results) {
         if (!results || results.vulnerabilityCount === 0) {
-            showNoIssues();
-            updateStatusWithCounts(0, {});
-            window.currentIssues = [];
+            this.showNoIssues();
+            this.updateStatusWithCounts(0, {});
+            globalThis.window.currentIssues = [];
             return;
         }
 
-    
-        window.currentIssues = results.issues || [];
+        globalThis.window.currentIssues = results.issues || [];
+        this.elements.resultsSummary.style.display = 'block';
+        this.elements.noIssues.style.display = 'none';
 
-    
-        resultsSummary.style.display = 'block';
-        noIssues.style.display = 'none';
+        const url = new URL(results.url || this.state.currentTab.url);
+        this.elements.scanUrl.textContent = url.hostname;
 
-    
-        const url = new URL(results.url || currentTab.url);
-        scanUrl.textContent = url.hostname;
-
-    
         const counts = results.severityCounts || {};
-        document.getElementById('criticalCount').textContent = counts.critical || 0;
-        document.getElementById('highCount').textContent = counts.high || 0;
-        document.getElementById('mediumCount').textContent = counts.medium || 0;
-        document.getElementById('lowCount').textContent = counts.low || 0;
-
-    
-        displayIssuesList(results.issues || []);
-
-    
-        updateStatusWithCounts(results.vulnerabilityCount, counts);
+        this.updateCounts(counts);
+        // Remove detailed findings from the popup — keep summary only
+        this.elements.issuesList.innerHTML = '';
+        this.elements.issuesList.style.display = 'none';
+        this.updateStatusWithCounts(results.vulnerabilityCount, counts);
+        const report = document.getElementById('reportContainer');
+        if (report) { report.hidden = true; report.innerHTML = ''; }
     }
 
+    updateCounts(counts) {
+        this.elements.criticalCount.textContent = counts.critical || 0;
+        this.elements.highCount.textContent = counts.high || 0;
+        this.elements.mediumCount.textContent = counts.medium || 0;
+        this.elements.lowCount.textContent = counts.low || 0;
+    }
 
-    function displayIssuesList(issues) {
-        issuesList.innerHTML = '';
+    displayIssuesList(issues) {
+        this.elements.issuesList.innerHTML = '';
 
-    
         const sortedIssues = issues.sort((a, b) => {
             const severityOrder = { critical: 4, high: 3, medium: 2, low: 1 };
             return severityOrder[b.severity] - severityOrder[a.severity];
         });
 
         sortedIssues.forEach((issue, index) => {
-            const issueElement = document.createElement('div');
-            issueElement.className = `issue-item ${issue.severity}`;
-            
-            const hasElements = issue.details?.evidence?.some(e => e.element || e.selector);
-            const isHighlighted = highlightedIssues.has(index);
-            
-            issueElement.innerHTML = `
-                <div class="issue-title">${issue.message}</div>
-                <div class="issue-description">
-                    ${issue.details?.description || 'Click for more information'}
-                </div>
-                <div class="issue-actions">
-                    <div class="action-btn" data-action="details" data-index="${index}">
-                        📋 Details
-                    </div>
-                    ${hasElements ? `
-                        <div class="action-btn highlight ${isHighlighted ? 'active' : ''}" 
-                             data-action="highlight" data-index="${index}">
-                            ${isHighlighted ? '🔍 Hide' : '🎯 Highlight'}
-                        </div>
-                    ` : ''}
-                </div>
-            `;
-
-            issueElement.addEventListener('click', (e) => {
-                if (e.target.classList.contains('action-btn')) {
-                    const action = e.target.getAttribute('data-action');
-                    const index = parseInt(e.target.getAttribute('data-index'));
-                    
-                    if (action === 'details') {
-                        showIssueDetails(index);
-                    } else if (action === 'highlight') {
-                        toggleHighlight(index);
-                    }
-                } else {
-                    showIssueDetails(index);
-                }
-            });
-
-            issuesList.appendChild(issueElement);
+            const issueElement = this.createIssueElement(issue, index);
+            this.elements.issuesList.appendChild(issueElement);
         });
     }
 
+    createIssueElement(issue, index) {
+        const issueElement = document.createElement('div');
+        issueElement.className = `issue-item ${issue.severity}`;
 
-    function showIssueDetails(issueIndex) {
-        const issues = getCurrentIssues();
-        if (!issues || !issues[issueIndex]) return;
-        
+        const hasElements = issue.details?.evidence?.some(e => e.element || e.selector);
+        const isHighlighted = this.state.highlightedIssues.has(index);
+        const highlightClass = isHighlighted ? 'active' : '';
+        const highlightText = isHighlighted ? '🔍 Hide' : '🎯 Highlight';
+
+        issueElement.innerHTML = `
+            <div class="issue-title">${issue.message}</div>
+            <div class="issue-description">
+                ${issue.details?.description || 'Click for more information'}
+            </div>
+            <div class="issue-actions">
+                <div class="action-btn" data-action="details" data-index="${index}">
+                    📋 Details
+                </div>
+                ${hasElements ? `
+                    <div class="action-btn highlight ${highlightClass}"
+                         data-action="highlight" data-index="${index}">
+                        ${highlightText}
+                    </div>
+                ` : ''}
+            </div>
+        `;
+
+        issueElement.addEventListener('click', (e) => {
+            if (e.target.classList.contains('action-btn')) {
+                const action = e.target.dataset.action;
+                const idx = Number.parseInt(e.target.dataset.index);
+
+                if (action === 'details') {
+                    this.showIssueDetails(idx);
+                } else if (action === 'highlight') {
+                    this.toggleHighlight(idx);
+                }
+            } else {
+                this.showIssueDetails(index);
+            }
+        });
+
+        return issueElement;
+    }
+
+    renderReport(results) {
+        const container = this.elements.reportContainer || document.getElementById('reportContainer');
+        if (!container) return;
+
+        container.innerHTML = '';
+        container.hidden = false;
+
+        const header = document.createElement('div');
+        header.className = 'report-header';
+
+        const title = document.createElement('div');
+        title.innerHTML = `<strong>Scan Report</strong> <small>${new Date(results.timestamp || Date.now()).toLocaleString()}</small>`;
+
+        const actions = document.createElement('div');
+        actions.className = 'report-actions';
+        const exportBtn = document.createElement('button');
+        exportBtn.className = 'action-btn primary-btn';
+        exportBtn.textContent = 'Export Report';
+        exportBtn.addEventListener('click', () => this.exportReport(results));
+        actions.appendChild(exportBtn);
+
+        header.appendChild(title);
+        header.appendChild(actions);
+
+        container.appendChild(header);
+
+        const summary = document.createElement('div');
+        summary.className = 'report-summary';
+
+        const statTotals = document.createElement('div');
+        statTotals.className = 'stat';
+        statTotals.textContent = `${results.vulnerabilityCount || 0} issues`;
+        summary.appendChild(statTotals);
+
+        const statCritical = document.createElement('div');
+        statCritical.className = 'stat';
+        statCritical.textContent = `Critical: ${(results.severityCounts?.critical) || 0}`;
+        summary.appendChild(statCritical);
+
+        const statHigh = document.createElement('div');
+        statHigh.className = 'stat';
+        statHigh.textContent = `High: ${(results.severityCounts?.high) || 0}`;
+        summary.appendChild(statHigh);
+
+        const statMedium = document.createElement('div');
+        statMedium.className = 'stat';
+        statMedium.textContent = `Medium: ${(results.severityCounts?.medium) || 0}`;
+        summary.appendChild(statMedium);
+
+        const statLow = document.createElement('div');
+        statLow.className = 'stat';
+        statLow.textContent = `Low: ${(results.severityCounts?.low) || 0}`;
+        summary.appendChild(statLow);
+
+        container.appendChild(summary);
+
+        const issues = results.issues || [];
+        if (!issues.length) {
+            const empty = document.createElement('div');
+            empty.className = 'report-empty';
+            empty.textContent = 'No issues to show in the report.';
+            container.appendChild(empty);
+            return;
+        }
+
+        issues.forEach((issue, idx) => {
+            const card = document.createElement('div');
+            card.className = `finding-card ${issue.severity || ''}`;
+
+            const title = document.createElement('div');
+            title.className = 'title';
+            title.innerHTML = `
+                <div>${issue.message}</div>
+                <div class="finding-actions">
+                    <div class="finding-severity ${issue.severity || 'low'}">${(issue.severity || 'low').toUpperCase()}</div>
+                    <button class="primary" data-idx="${idx}">Details</button>
+                </div>
+            `;
+
+            const meta = document.createElement('div');
+            meta.className = 'meta';
+            meta.textContent = issue.details?.description || ''; 
+
+            const details = document.createElement('div');
+            details.className = 'details';
+            details.innerHTML = `<pre>${JSON.stringify(issue.details || {}, null, 2)}</pre>`;
+
+            title.querySelector('button')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                card.classList.toggle('expanded');
+            });
+
+            card.appendChild(title);
+            if (meta.textContent) card.appendChild(meta);
+            card.appendChild(details);
+
+            container.appendChild(card);
+        });
+    }
+
+    exportReport(results) {
+        try {
+            const data = {
+                generated: new Date().toISOString(),
+                url: results.url || this.state.currentTab?.url,
+                counts: results.severityCounts || {},
+                total: results.vulnerabilityCount || 0,
+                issues: results.issues || []
+            };
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `blowfish-report-${(new Date()).toISOString().replace(/[:.]/g,'-')}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+        } catch (error) {
+            console.error('Export failed:', error);
+        }
+    }
+
+    showIssueDetails(issueIndex) {
+        const issues = this.getCurrentIssues();
+        if (!issues?.[issueIndex]) return;
+
         const issue = issues[issueIndex];
-        
-    
-    
         let message = `${issue.message}\n\n`;
         if (issue.details?.description) {
             message += `Description: ${issue.details.description}\n\n`;
@@ -354,50 +520,44 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (issue.details?.solution) {
             message += `Solution: ${issue.details.solution}`;
         }
-        
+
         alert(message);
     }
 
+    async toggleHighlight(issueIndex) {
+        if (!this.state.currentTab) return;
 
-    async function toggleHighlight(issueIndex) {
-        if (!currentTab) return;
-        
         const settings = await chrome.storage.sync.get(['showHighlights']);
         if (settings.showHighlights === false) {
             alert('Element highlighting is disabled in settings');
             return;
         }
-        
-        const issues = getCurrentIssues();
-        if (!issues || !issues[issueIndex]) return;
-        
+
+        const issues = this.getCurrentIssues();
+        if (!issues?.[issueIndex]) return;
+
         const issue = issues[issueIndex];
-        const isHighlighted = highlightedIssues.has(issueIndex);
-        
+        const isHighlighted = this.state.highlightedIssues.has(issueIndex);
+
         try {
             if (isHighlighted) {
-            
-                await chrome.tabs.sendMessage(currentTab.id, {
+                await chrome.tabs.sendMessage(this.state.currentTab.id, {
                     type: 'REMOVE_HIGHLIGHT',
                     issueIndex: issueIndex
                 });
-                highlightedIssues.delete(issueIndex);
+                this.state.highlightedIssues.delete(issueIndex);
             } else {
-            
-                await chrome.tabs.sendMessage(currentTab.id, {
+                await chrome.tabs.sendMessage(this.state.currentTab.id, {
                     type: 'ADD_HIGHLIGHT',
                     issueIndex: issueIndex,
                     issue: issue
                 });
-                highlightedIssues.add(issueIndex);
+                this.state.highlightedIssues.add(issueIndex);
             }
-            
-        
-            const results = await chrome.runtime.sendMessage({
-                type: 'GET_SCAN_RESULTS'
-            });
+
+            const results = await chrome.runtime.sendMessage({ type: 'GET_SCAN_RESULTS', tabId: this.state.currentTab?.id });
             if (results) {
-                displayResults(results);
+                this.displayResults(results);
             }
         } catch (error) {
             console.error('Failed to toggle highlight:', error);
@@ -405,85 +565,66 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-
-    function getCurrentIssues() {
-    
-        return window.currentIssues || [];
+    getCurrentIssues() {
+        return globalThis.window.currentIssues || [];
     }
 
+    async clearAllHighlights() {
+        if (!this.state.currentTab) return;
 
-    async function clearAllHighlights() {
-        if (!currentTab) return;
-        
         try {
-            await chrome.tabs.sendMessage(currentTab.id, {
+            await chrome.tabs.sendMessage(this.state.currentTab.id, {
                 type: 'CLEAR_ALL_HIGHLIGHTS'
             });
-            highlightedIssues.clear();
+            this.state.highlightedIssues.clear();
         } catch (error) {
             console.error('Failed to clear highlights:', error);
         }
     }
 
-
-    function showNoIssues() {
-        resultsSummary.style.display = 'none';
-        noIssues.style.display = 'block';
-        issuesList.innerHTML = '';
+    showNoIssues() {
+        this.elements.resultsSummary.style.display = 'none';
+        this.elements.noIssues.style.display = 'block';
+        this.elements.issuesList.innerHTML = '';
+        const report = document.getElementById('reportContainer');
+        if (report) { report.hidden = true; report.innerHTML = ''; }
     }
 
-
-    function showNoResults() {
-        resultsSummary.style.display = 'none';
-        noIssues.style.display = 'none';
-        statusText.textContent = 'Click to scan';
-        statusIndicator.className = 'status-indicator';
-        scanButton.textContent = 'Scan Page';
+    showNoResults() {
+        this.elements.resultsSummary.style.display = 'none';
+        this.elements.noIssues.style.display = 'none';
+        this.updateStatus('Click to scan', 'ready');
+        this.elements.scanButton.textContent = 'Scan Page';
+        const report = document.getElementById('reportContainer');
+        if (report) { report.hidden = true; report.innerHTML = ''; }
     }
 
+    showScanError(errorMessage) {
+        this.elements.resultsSummary.style.display = 'none';
+        this.elements.noIssues.style.display = 'none';
+        this.elements.issuesList.innerHTML = '';
+        const report = document.getElementById('reportContainer');
+        if (report) { report.hidden = true; report.innerHTML = ''; }
 
-    function updateStatus(text, type) {
-        statusText.textContent = text;
-        statusIndicator.className = 'status-indicator';
-        
-        switch (type) {
-            case 'scanning':
-                statusIndicator.classList.add('scanning');
-                break;
-            case 'error':
-            case 'warning':
-                statusIndicator.classList.add('issues');
-                break;
-            case 'safe':
-            
-                break;
-            case 'ready':
-            default:
-                statusIndicator.style.background = '#718096';
-                break;
-        }
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'scan-error';
+        errorDiv.innerHTML = `
+            <div class="error-icon">⚠️</div>
+            <div class="error-title">Scan Error</div>
+            <div class="error-message">${errorMessage}</div>
+        `;
+
+        this.elements.issuesList.appendChild(errorDiv);
+        this.updateStatus('Error', 'error');
     }
 
-
-    function getHighestSeverity(counts) {
-        if (counts.critical > 0) return 'critical';
-        if (counts.high > 0) return 'high';
-        if (counts.medium > 0) return 'medium';
-        if (counts.low > 0) return 'low';
-        return 'none';
-    }
-
-
-    async function toggleAutoScan() {
-        const isActive = autoScanToggle.classList.contains('active');
-        autoScanToggle.classList.toggle('active');
-        
-        const newValue = !isActive;
-        await chrome.storage.sync.set({
-            autoScan: newValue
-        });
-        
     
+    async toggleAutoScan() {
+        const isActive = this.elements.autoScanToggle.classList.contains('active');
+        this.elements.autoScanToggle.classList.toggle('active');
+        const newValue = !isActive;
+        await chrome.storage.sync.set({ autoScan: newValue });
+
         try {
             await chrome.runtime.sendMessage({
                 type: 'SETTINGS_UPDATED',
@@ -493,21 +634,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (error) {
             console.error('Failed to notify background of auto-scan change:', error);
         }
-        
-        console.log('Auto-scan setting changed to:', newValue);
     }
 
-
-    async function toggleNotifications() {
-        const isActive = notificationsToggle.classList.contains('active');
-        notificationsToggle.classList.toggle('active');
-        
+    async toggleNotifications() {
+        const isActive = this.elements.notificationsToggle.classList.contains('active');
+        this.elements.notificationsToggle.classList.toggle('active');
         const newValue = !isActive;
-        await chrome.storage.sync.set({
-            showNotifications: newValue
-        });
-        
-    
+        await chrome.storage.sync.set({ showNotifications: newValue });
+
         try {
             await chrome.runtime.sendMessage({
                 type: 'SETTINGS_UPDATED',
@@ -517,881 +651,219 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (error) {
             console.error('Failed to notify background of notifications change:', error);
         }
-        
-        console.log('Notifications setting changed to:', newValue);
     }
 
-
-    async function toggleHighlights() {
-        const isActive = highlightToggle.classList.contains('active');
-        highlightToggle.classList.toggle('active');
-        
+    async toggleHighlights() {
+        const isActive = this.elements.highlightToggle.classList.contains('active');
+        this.elements.highlightToggle.classList.toggle('active');
         const newValue = !isActive;
-        await chrome.storage.sync.set({
-            showHighlights: newValue
-        });
-        
-    
-        await updateScannerSettings();
-        
-    
+        await chrome.storage.sync.set({ showHighlights: newValue });
+
+        await this.updateScannerSettings();
+
         if (!newValue) {
-            await clearAllHighlights();
+            await this.clearAllHighlights();
         }
-        
-        console.log('Highlights setting changed to:', newValue);
     }
 
-
-    async function toggleHideBubble() {
-        const isActive = hideBubbleToggle.classList.contains('active');
-        hideBubbleToggle.classList.toggle('active');
-        
+    async toggleHideBubble() {
+        const isActive = this.elements.hideBubbleToggle.classList.contains('active');
+        this.elements.hideBubbleToggle.classList.toggle('active');
         const newValue = !isActive;
-        await chrome.storage.sync.set({
-            hideBubble: newValue
-        });
-        
-    
-        await updateScannerSettings();
-        
-        console.log('Hide bubble setting changed to:', newValue);
-    }
-    
+        await chrome.storage.sync.set({ hideBubble: newValue });
 
-    async function updateScannerSettings() {
-        if (!currentTab) return;
-        
+        await this.updateScannerSettings();
+    }
+
+    async updateScannerSettings() {
+        if (!this.state.currentTab) return;
+
         try {
-        
-            const settings = await chrome.storage.sync.get([
-                'showHighlights', 
-                'hideBubble'
-            ]);
-            
-        
-            await chrome.tabs.sendMessage(currentTab.id, {
+            const settings = await chrome.storage.sync.get(['showHighlights', 'hideBubble']);
+            await chrome.tabs.sendMessage(this.state.currentTab.id, {
                 type: 'UPDATE_SCANNER_SETTINGS',
                 settings: settings
             });
-            
-            console.log('Scanner settings updated:', settings);
         } catch (error) {
             console.error('Failed to update scanner settings:', error);
         }
     }
 
+    
+    displayWhitelist() {
+        this.elements.whitelistItems.innerHTML = '';
 
-    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-        if (message.type === 'SCAN_PROGRESS') {
-            const progressText = message.data.currentCheck || 'Scanning...';
-            updateStatus(progressText, 'scanning');
-        } else if (message.type === 'SCAN_COMPLETE') {
-        
-            setTimeout(() => {
-                loadScanResults();
-                updateStatus('Scan completed', 'ready');
-                scanButton.disabled = false;
-            }, 500);
-        }
-        
-        return true;
-    });
-
-
-    if (!tab || tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
-        updateStatus('Cannot scan this page', 'error');
-        scanButton.disabled = true;
-        
-        const warning = document.createElement('div');
-        warning.style.cssText = `
-            background: #fed7d7;
-            color: #c53030;
-            padding: 12px;
-            border-radius: 8px;
-            margin: 16px 0;
-            font-size: 12px;
-            text-align: center;
-        `;
-        warning.textContent = 'Security scanning is not available on Chrome internal pages';
-        content.insertBefore(warning, content.firstChild);
-    }
-
-
-    function showScanError(errorMessage) {
-        resultsSummary.style.display = 'none';
-        noIssues.style.display = 'none';
-        issuesList.innerHTML = '';
-        
-        const errorDiv = document.createElement('div');
-        errorDiv.style.cssText = `
-            background: #fed7d7;
-            color: #c53030;
-            border: 1px solid #fc8181;
-            border-radius: 8px;
-            padding: 16px;
-            margin: 16px 0;
-            text-align: center;
-        `;
-        errorDiv.innerHTML = `
-            <div style="font-size: 20px; margin-bottom: 8px;">⚠️</div>
-            <div style="font-weight: 700; margin-bottom: 4px;">Scan Error</div>
-            <div style="font-size: 12px;">${errorMessage}</div>
-        `;
-        
-        issuesList.appendChild(errorDiv);
-        updateStatus('Error', 'error');
-    }
-
-
-    function canScanPage(url) {
-        if (!url) return false;
-        
-        const unscannable = [
-            'chrome://',
-            'chrome-extension://',
-            'moz-extension://',
-            'about:',
-            'file://',
-            'data:',
-            'blob:',
-            'javascript:'
-        ];
-        
-        return !unscannable.some(prefix => url.startsWith(prefix));
-    }
-
-
-    function displayWhitelist() {
-        whitelistItems.innerHTML = '';
-
-        if (currentWhitelist.length === 0) {
-            noWhitelistItems.style.display = 'block';
+        if (this.state.currentWhitelist.length === 0) {
+            this.elements.noWhitelistItems.style.display = 'block';
             return;
         }
 
-        noWhitelistItems.style.display = 'none';
+        this.elements.noWhitelistItems.style.display = 'none';
 
-        currentWhitelist.forEach((site, index) => {
-            const siteElement = document.createElement('div');
-            siteElement.className = 'whitelist-item';
-            
-            const domainSpan = document.createElement('span');
-            domainSpan.className = 'whitelist-domain';
-            domainSpan.textContent = site;
-
-            const removeBtn = document.createElement('button');
-            removeBtn.className = 'remove-whitelist-btn';
-            removeBtn.textContent = 'Remove';
-            removeBtn.addEventListener('click', () => {
-                removeFromWhitelist(index);
-            });
-
-            siteElement.appendChild(domainSpan);
-            siteElement.appendChild(removeBtn);
-            whitelistItems.appendChild(siteElement);
+        this.state.currentWhitelist.forEach((site, index) => {
+            const siteElement = this.createWhitelistItem(site, index);
+            this.elements.whitelistItems.appendChild(siteElement);
         });
     }
 
+    createWhitelistItem(site, index) {
+        const siteElement = document.createElement('div');
+        siteElement.className = 'whitelist-item';
 
-    function updateAddToWhitelistButton() {
-        if (!currentTab || !canScanPage(currentTab.url)) {
-            addToWhitelistBtn.disabled = true;
-            addToWhitelistBtn.textContent = 'Cannot Add';
+        const domainSpan = document.createElement('span');
+        domainSpan.className = 'whitelist-domain';
+        domainSpan.textContent = site;
+
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'remove-whitelist-btn';
+        removeBtn.textContent = 'Remove';
+        removeBtn.addEventListener('click', () => this.removeFromWhitelist(index));
+
+        siteElement.appendChild(domainSpan);
+        siteElement.appendChild(removeBtn);
+        return siteElement;
+    }
+
+    updateAddToWhitelistButton() {
+        if (!this.state.currentTab || !this.canScanPage(this.state.currentTab.url)) {
+            this.elements.addToWhitelistBtn.disabled = true;
+            this.elements.addToWhitelistBtn.textContent = 'Cannot Add';
             return;
         }
 
-        const site = new URL(currentTab.url).hostname;
-        const isWhitelisted = currentWhitelist.includes(site);
-        
-        addToWhitelistBtn.disabled = isWhitelisted || currentWhitelist.length >= 50;
-        addToWhitelistBtn.textContent = isWhitelisted ? 'Already Added' : 'Add Current Site';
-        
+        const site = new URL(this.state.currentTab.url).hostname;
+        const isWhitelisted = this.state.currentWhitelist.includes(site);
+
         if (isWhitelisted) {
-            addToWhitelistBtn.style.background = '#fed7d7';
-            addToWhitelistBtn.style.borderColor = '#fc8181';
-            addToWhitelistBtn.style.color = '#c53030';
+            this.elements.addToWhitelistBtn.disabled = true;
+            this.elements.addToWhitelistBtn.textContent = 'Already Added';
         } else {
-            addToWhitelistBtn.style.background = '#e6fffa';
-            addToWhitelistBtn.style.borderColor = '#38a169';
-            addToWhitelistBtn.style.color = '#38a169';
+            this.elements.addToWhitelistBtn.disabled = false;
+            this.elements.addToWhitelistBtn.textContent = 'Add Current Site';
         }
     }
 
-    function updateProxyButton() {
-        if (!currentTab || !canScanPage(currentTab.url)) {
-            openProxyBtn.disabled = true;
-            openProxyBtn.textContent = '🌐 Cannot Proxy';
-            openProxyBtn.style.background = '#fed7d7';
-            openProxyBtn.style.borderColor = '#fc8181';
-            openProxyBtn.style.color = '#c53030';
+    async addCurrentSiteToWhitelist() {
+        if (!this.state.currentTab || !this.canScanPage(this.state.currentTab.url)) {
+            this.showScanError('Cannot whitelist this page type');
             return;
         }
 
-        openProxyBtn.disabled = false;
-        openProxyBtn.textContent = '🌐 Open via Proxyium';
-        openProxyBtn.style.background = '#ebf8ff';
-        openProxyBtn.style.borderColor = '#3182ce';
-        openProxyBtn.style.color = '#3182ce';
-    }
-
-
-    async function addCurrentSiteToWhitelist() {
-        if (!currentTab || !canScanPage(currentTab.url)) {
-            showScanError('Cannot whitelist this page type');
+        const site = new URL(this.state.currentTab.url).hostname;
+        if (this.state.currentWhitelist.includes(site)) {
+            this.showScanError('This site is already in the whitelist');
             return;
         }
 
-        const site = new URL(currentTab.url).hostname;
-        if (currentWhitelist.includes(site)) {
-            showScanError('This site is already in the whitelist');
+        if (this.state.currentWhitelist.length >= MAX_WHITELIST_SITES) {
+            this.showScanError('Whitelist is full (maximum 50 sites)');
             return;
         }
 
-        if (currentWhitelist.length >= 50) {
-            showScanError('Whitelist is full (maximum 50 sites)');
-            return;
-        }
+        this.state.currentWhitelist.push(site);
+        await chrome.storage.sync.set({ whitelist: this.state.currentWhitelist });
 
-        currentWhitelist.push(site);
-        await chrome.storage.sync.set({
-            whitelist: currentWhitelist
-        });
-        
-    
         chrome.runtime.sendMessage({
             type: 'WHITELIST_UPDATED',
-            whitelist: currentWhitelist
+            whitelist: this.state.currentWhitelist
         });
-        
-        displayWhitelist();
-        updateAddToWhitelistButton();
-        
-    
-        updateStatus(`Added ${site} to whitelist`, 'safe');
+
+        this.displayWhitelist();
+        this.updateAddToWhitelistButton();
+        this.updateStatus(`Added ${site} to whitelist`, 'safe');
     }
 
+    async removeFromWhitelist(index) {
+        const removedSite = this.state.currentWhitelist[index];
+        this.state.currentWhitelist.splice(index, 1);
 
-    async function removeFromWhitelist(index) {
-        const removedSite = currentWhitelist[index];
-        currentWhitelist.splice(index, 1);
-        
-        await chrome.storage.sync.set({
-            whitelist: currentWhitelist
-        });
-        
-    
+        await chrome.storage.sync.set({ whitelist: this.state.currentWhitelist });
+
         chrome.runtime.sendMessage({
             type: 'WHITELIST_UPDATED',
-            whitelist: currentWhitelist
+            whitelist: this.state.currentWhitelist
         });
-        
-        displayWhitelist();
-        updateAddToWhitelistButton();
-        
-    
-        updateStatus(`Removed ${removedSite} from whitelist`, 'safe');
+
+        this.displayWhitelist();
+        this.updateAddToWhitelistButton();
+        this.updateStatus(`Removed ${removedSite} from whitelist`, 'safe');
     }
 
+    async clearAllWhitelist() {
+        this.state.currentWhitelist = [];
+        await chrome.storage.sync.set({ whitelist: this.state.currentWhitelist });
 
-    async function clearAllWhitelist() {
-        currentWhitelist = [];
-        await chrome.storage.sync.set({
-            whitelist: currentWhitelist
-        });
-        
-    
         chrome.runtime.sendMessage({
             type: 'WHITELIST_UPDATED',
-            whitelist: currentWhitelist
+            whitelist: this.state.currentWhitelist
         });
-        
-        displayWhitelist();
-        updateAddToWhitelistButton();
-        
-    
-        updateStatus('Whitelist cleared', 'safe');
+
+        this.displayWhitelist();
+        this.updateAddToWhitelistButton();
+        this.updateStatus('Whitelist cleared', 'safe');
     }
 
+    
 
-    function updateStatusWithCounts(totalCount, counts) {
-        if (totalCount === 0) {
-            statusText.textContent = 'No issues found';
-            statusIndicator.className = 'status-indicator';
+
+    
+    async setHardeningLevel(level) {
+        if (!this.state.currentTab || !this.canScanPage(this.state.currentTab.url)) {
+            this.showScanError('Cannot apply hardening to this page type');
             return;
         }
 
-    
-        let statusParts = [];
-        if (counts.critical > 0) statusParts.push(`${counts.critical} Critical`);
-        if (counts.high > 0) statusParts.push(`${counts.high} High`);
-        if (counts.medium > 0) statusParts.push(`${counts.medium} Medium`);
-        if (counts.low > 0) statusParts.push(`${counts.low} Low`);
-
-        if (statusParts.length > 0) {
-            statusText.textContent = statusParts.join(', ');
-        } else {
-            statusText.textContent = `${totalCount} issue${totalCount > 1 ? 's' : ''} found`;
-        }
-
-    
-        const highestSeverity = getHighestSeverity(counts);
-        if (highestSeverity === 'critical') {
-            statusIndicator.className = 'status-indicator issues';
-        } else if (highestSeverity === 'high' || highestSeverity === 'medium') {
-            statusIndicator.className = 'status-indicator scanning';
-        } else {
-            statusIndicator.className = 'status-indicator';
-        }
-    }
-
-
-    const communityConfidence = document.getElementById('communityConfidence');
-    const meterFill = document.getElementById('meterFill');
-    const meterPercentage = document.getElementById('meterPercentage');
-    const safeVotes = document.getElementById('safeVotes');
-    const unsafeVotes = document.getElementById('unsafeVotes');
-    const safeFeedbackBtn = document.getElementById('safeFeedbackBtn');
-    const unsafeFeedbackBtn = document.getElementById('unsafeFeedbackBtn');
-    const feedbackStatus = document.getElementById('feedbackStatus');
-
-
-    loadCommunityStats();
-
-
-    safeFeedbackBtn.addEventListener('click', () => submitFeedback(true));
-    unsafeFeedbackBtn.addEventListener('click', () => submitFeedback(false));
-
-    async function loadCommunityStats() {
-        if (!currentTab || !canScanPage(currentTab.url)) {
-            showNoStatsAvailable();
-            return;
-        }
-    
-        try {
-            const url = new URL(`${FEEDBACK_API_URL}/stats`);
-            url.searchParams.append('url', currentTab.url);
-            
-            const response = await fetch(url.toString(), {
-                method: 'GET',
-                headers: {
-                    'Content-Type': 'application/json',
-                }
-            });
-    
-            if (response.ok) {
-                const stats = await response.json();
-                displayCommunityStats(stats);
-            } else {
-                showNoStatsAvailable();
-            }
-        } catch (error) {
-            console.error('Failed to load community stats:', error);
-            showNoStatsAvailable();
-        }
-    }
-
-    function displayCommunityStats(stats) {
-    
-        communityConfidence.textContent = stats.confidence_level;
-        
-    
-        const percentage = stats.safety_percentage;
-        meterFill.style.width = `${100 - percentage}%`;
-        meterPercentage.textContent = `${percentage}% Safe`;
-        
-    
-        safeVotes.textContent = `👍 ${stats.safe_votes}`;
-        unsafeVotes.textContent = `👎 ${stats.unsafe_votes}`;
-        
-    
-        const confidence = stats.confidence_level.toLowerCase();
-        if (confidence.includes('very high') || confidence.includes('high')) {
-            communityConfidence.style.background = '#c6f6d5';
-            communityConfidence.style.color = '#2f855a';
-            communityConfidence.style.borderColor = '#9ae6b4';
-        } else if (confidence.includes('medium')) {
-            communityConfidence.style.background = '#fef5e7';
-            communityConfidence.style.color = '#c05621';
-            communityConfidence.style.borderColor = '#fbd38d';
-        } else {
-            communityConfidence.style.background = '#fed7d7';
-            communityConfidence.style.color = '#c53030';
-            communityConfidence.style.borderColor = '#fc8181';
-        }
-        
-    
-        if (percentage >= 70) {
-            meterFill.style.background = 'rgba(56, 161, 105, 0.3)';
-        } else if (percentage >= 40) {
-            meterFill.style.background = 'rgba(214, 158, 46, 0.3)';
-        } else {
-            meterFill.style.background = 'rgba(229, 62, 62, 0.3)';
-        }
-    }
-
-    function showNoStatsAvailable() {
-        communityConfidence.textContent = 'No Data';
-        meterPercentage.textContent = '--';
-        safeVotes.textContent = '👍 0';
-        unsafeVotes.textContent = '👎 0';
-        meterFill.style.width = '0%';
-        
-        communityConfidence.style.background = '#f7fafc';
-        communityConfidence.style.color = '#4a5568';
-        communityConfidence.style.borderColor = '#e2e8f0';
-    }
-
-    async function submitFeedback(isSafe) {
-        if (!currentTab || !canScanPage(currentTab.url)) {
-            feedbackStatus.textContent = 'Cannot submit feedback for this page';
-            feedbackStatus.className = 'feedback-status error';
-            return;
-        }
-
-    
-        safeFeedbackBtn.disabled = true;
-        unsafeFeedbackBtn.disabled = true;
-        feedbackStatus.textContent = 'Submitting feedback...';
-        feedbackStatus.className = 'feedback-status loading';
+        this.state.currentHardeningLevel = level;
+        await chrome.storage.sync.set({ hardeningLevel: level });
+        this.updateHardeningUI(level);
 
         try {
-            const response = await fetch(`${FEEDBACK_API_URL}/feedback`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    url: currentTab.url,
-                    is_safe: isSafe,
-                    user_agent: navigator.userAgent
-                })
-            });
+            await chrome.runtime.sendMessage({ type: 'UPDATE_HARDENING_LEVEL', level: level });
+            await chrome.tabs.sendMessage(this.state.currentTab.id, { type: 'UPDATE_HARDENING', level: level });
 
-            const result = await response.json();
-
-            if (response.ok && result.success) {
-                feedbackStatus.textContent = 'Thank you for your feedback!';
-                feedbackStatus.className = 'feedback-status success';
-                
-            
-                if (isSafe) {
-                    safeFeedbackBtn.classList.add('active');
-                    unsafeFeedbackBtn.classList.remove('active');
-                } else {
-                    unsafeFeedbackBtn.classList.add('active');
-                    safeFeedbackBtn.classList.remove('active');
-                }
-                
-            
-                setTimeout(() => {
-                    loadCommunityStats();
-                }, 1000);
-                
-            } else {
-            
-                feedbackStatus.textContent = result.message || 'Failed to submit feedback';
-                feedbackStatus.className = 'feedback-status error';
-                
-            
-                if (result.message && result.message.includes('already submitted')) {
-                    feedbackStatus.textContent = 'You have already voted for this website';
-                    feedbackStatus.className = 'feedback-status error';
-                }
-            }
-        } catch (error) {
-            console.error('Failed to submit feedback:', error);
-            feedbackStatus.textContent = 'Network error occurred';
-            feedbackStatus.className = 'feedback-status error';
-        } finally {
-        
-            setTimeout(() => {
-                safeFeedbackBtn.disabled = false;
-                unsafeFeedbackBtn.disabled = false;
-            }, 2000);
-        }
-    }
-
-    async function generateUserHash(seed) {
-        const encoder = new TextEncoder();
-        const data = encoder.encode(seed + navigator.userAgent + Date.now());
-        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 16);
-    }
-
-   
-    let currentWebsiteTags = {};
-    let selectedQuickTags = new Set();
-
-   
-    const TAGS_API_BASE = 'https://api.blowfish-security.com/v1/tags';
-
-   
-    const MOCK_TAGS_DATA = {
-        'example.com': {
-            security: [
-                { name: 'safe', votes: { up: 45, down: 2 }, verified: true },
-                { name: 'https', votes: { up: 23, down: 0 }, verified: true }
-            ],
-            privacy: [
-                { name: 'tracking', votes: { up: 12, down: 8 }, verified: false },
-                { name: 'cookies', votes: { up: 15, down: 3 }, verified: false }
-            ],
-            advertising: [
-                { name: 'minimal-ads', votes: { up: 18, down: 4 }, verified: false }
-            ],
-            technical: [
-                { name: 'fast-loading', votes: { up: 32, down: 1 }, verified: true }
-            ],
-            other: []
-        },
-        'github.com': {
-            security: [
-                { name: 'secure', votes: { up: 156, down: 1 }, verified: true },
-                { name: 'open-source', votes: { up: 89, down: 0 }, verified: true }
-            ],
-            privacy: [
-                { name: 'privacy-friendly', votes: { up: 67, down: 5 }, verified: true }
-            ],
-            advertising: [],
-            technical: [
-                { name: 'developer-tools', votes: { up: 123, down: 2 }, verified: true },
-                { name: 'reliable', votes: { up: 98, down: 1 }, verified: true }
-            ],
-            other: [
-                { name: 'educational', votes: { up: 76, down: 0 }, verified: false }
-            ]
-        }
-    };
-
-
-   
-    function setupEventListeners() {
-       
-        document.getElementById('scanButton').addEventListener('click', startManualScan);
-        
-       
-        const clearHighlightsBtn = document.getElementById('clearHighlightsBtn');
-        if (clearHighlightsBtn) {
-            clearHighlightsBtn.addEventListener('click', clearAllHighlights);
-        }
-
-       
-        document.getElementById('autoScanToggle').addEventListener('click', toggleAutoScan);
-        document.getElementById('notificationsToggle').addEventListener('click', toggleNotifications);
-        document.getElementById('highlightToggle').addEventListener('click', toggleHighlights);
-        document.getElementById('hideBubbleToggle').addEventListener('click', toggleHideBubble);
-
-       
-        document.getElementById('addToWhitelistBtn').addEventListener('click', addCurrentSiteToWhitelist);
-        document.getElementById('clearWhitelistBtn').addEventListener('click', clearAllWhitelist);
-
-       
-        document.getElementById('safeFeedbackBtn').addEventListener('click', () => submitFeedback(true));
-        document.getElementById('unsafeFeedbackBtn').addEventListener('click', () => submitFeedback(false));
-
-       
-        document.getElementById('openProxyBtn').addEventListener('click', openViaProxy);
-    }
-
-   
-    document.addEventListener('DOMContentLoaded', () => {
-        loadScanResults();
-        loadCommunityStats();
-        updateAddToWhitelistButton();
-        updateProxyButton();
-        displayWhitelist();
-        
-       
-        chrome.storage.sync.get([
-            'autoScan', 
-            'showNotifications', 
-            'showHighlights', 
-            'hideBubble'
-        ], (settings) => {
-           
-            document.getElementById('autoScanToggle').classList.toggle('active', settings.autoScan !== false);
-            document.getElementById('notificationsToggle').classList.toggle('active', settings.showNotifications !== false);
-            document.getElementById('highlightToggle').classList.toggle('active', settings.showHighlights !== false);
-            document.getElementById('hideBubbleToggle').classList.toggle('active', settings.hideBubble === true);
-        });
-        
-       
-        setupEventListeners();
-        setupTagsEventListeners();
-    });
-
-   
-    function openViaProxy() {
-        if (!currentTab || !canScanPage(currentTab.url)) {
-            showScanError('Cannot proxy this page type');
-            return;
-        }
-
-        showProxyWarningModal();
-    }
-
-    function showProxyWarningModal() {
-        const modal = document.createElement('div');
-        modal.style.cssText = `
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0, 0, 0, 0.8);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 10000;
-            font-family: 'Ubuntu Mono', monospace;
-        `;
-
-        const modalContent = document.createElement('div');
-        modalContent.style.cssText = `
-            background: white;
-            border-radius: 12px;
-            padding: 24px;
-            max-width: 350px;
-            margin: 20px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.3);
-        `;
-
-        modalContent.innerHTML = `
-            <div style="text-align: center; margin-bottom: 20px;">
-                <div style="font-size: 48px; margin-bottom: 12px;">⚠️</div>
-                <div style="font-size: 18px; font-weight: 700; color: #c53030; margin-bottom: 8px;">
-                    Security Warning
-                </div>
-                <div style="font-size: 14px; color: #2d3748; line-height: 1.5;">
-                    You are about to access this website through Proxyium.
-                </div>
-            </div>
-            
-            <div style="background: #fff5f5; border: 1px solid #fed7d7; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
-                <div style="font-weight: 700; color: #c53030; margin-bottom: 8px; font-size: 14px;">
-                    Important Security Notice:
-                </div>
-                <ul style="color: #c53030; font-size: 12px; line-height: 1.4; margin-left: 16px;">
-                    <li>Proxyium can intercept and view your data</li>
-                    <li>Do NOT enter passwords, credit card details, or personal information</li>
-                    <li>Use only for browsing and basic safety testing</li>
-                    <li>Your IP address will be hidden from the target website</li>
-                </ul>
-            </div>
-            
-            <div style="display: flex; gap: 12px;">
-                <button id="cancelProxy" style="
-                    flex: 1;
-                    padding: 12px;
-                    border: 2px solid #e2e8f0;
-                    background: #f7fafc;
-                    color: #4a5568;
-                    border-radius: 8px;
-                    font-family: 'Ubuntu Mono', monospace;
-                    font-weight: 600;
-                    cursor: pointer;
-                    transition: all 0.2s ease;
-                ">
-                    Cancel
-                </button>
-                <button id="proceedProxy" style="
-                    flex: 1;
-                    padding: 12px;
-                    border: 2px solid #c53030;
-                    background: #c53030;
-                    color: white;
-                    border-radius: 8px;
-                    font-family: 'Ubuntu Mono', monospace;
-                    font-weight: 600;
-                    cursor: pointer;
-                    transition: all 0.2s ease;
-                ">
-                    I Understand, Proceed
-                </button>
-            </div>
-        `;
-
-        modal.appendChild(modalContent);
-        document.body.appendChild(modal);
-
-       
-        const cancelBtn = modal.querySelector('#cancelProxy');
-        const proceedBtn = modal.querySelector('#proceedProxy');
-
-        cancelBtn.addEventListener('mouseenter', () => {
-            cancelBtn.style.background = '#edf2f7';
-            cancelBtn.style.borderColor = '#cbd5e0';
-        });
-
-        cancelBtn.addEventListener('mouseleave', () => {
-            cancelBtn.style.background = '#f7fafc';
-            cancelBtn.style.borderColor = '#e2e8f0';
-        });
-
-        proceedBtn.addEventListener('mouseenter', () => {
-            proceedBtn.style.background = '#9c2626';
-            proceedBtn.style.borderColor = '#9c2626';
-        });
-
-        proceedBtn.addEventListener('mouseleave', () => {
-            proceedBtn.style.background = '#c53030';
-            proceedBtn.style.borderColor = '#c53030';
-        });
-
-       
-        cancelBtn.addEventListener('click', () => {
-            document.body.removeChild(modal);
-        });
-
-        proceedBtn.addEventListener('click', () => {
-            document.body.removeChild(modal);
-            proceedWithProxy();
-        });
-
-       
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) {
-                document.body.removeChild(modal);
-            }
-        });
-    }
-
-    function proceedWithProxy() {
-       
-        updateStatus('Opening via Proxyium...', 'safe');
-        
-       
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.action = 'https://cdn.proxyium.com/proxyrequest.php';
-        form.target = '_blank';
-        form.style.display = 'none';
-        
-       
-        const urlInput = document.createElement('input');
-        urlInput.type = 'hidden';
-        urlInput.name = 'url';
-        urlInput.value = currentTab.url;
-        
-        form.appendChild(urlInput);
-        document.body.appendChild(form);
-        
-       
-        form.submit();
-        
-       
-        document.body.removeChild(form);
-    }
-
-   
-    async function setHardeningLevel(level) {
-        if (!currentTab || !canScanPage(currentTab.url)) {
-            showScanError('Cannot apply hardening to this page type');
-            return;
-        }
-
-        currentHardeningLevel = level;
-        
-       
-        await chrome.storage.sync.set({
-            hardeningLevel: level
-        });
-
-       
-        updateHardeningUI(level);
-
-        try {
-           
-            await chrome.runtime.sendMessage({
-                type: 'UPDATE_HARDENING_LEVEL',
-                level: level
-            });
-
-           
-            await chrome.tabs.sendMessage(currentTab.id, {
-                type: 'UPDATE_HARDENING',
-                level: level
-            });
-
-           
             if (level === 'off') {
-                updateStatus('Hardening disabled', 'safe');
+                this.updateStatus('Hardening disabled', 'safe');
             } else {
-                updateStatus(`${getHardeningLevelName(level)} protection enabled`, 'safe');
+                this.updateStatus(`${this.getHardeningLevelName(level)} protection enabled`, 'safe');
             }
 
-           
-            setTimeout(() => {
-                loadHardeningStatus();
-            }, 500);
-
+            setTimeout(() => this.loadHardeningStatus(), 500);
         } catch (error) {
             console.error('Failed to update hardening:', error);
-            showScanError('Could not apply hardening to this page');
+            this.showScanError('Could not apply hardening to this page');
         }
     }
 
-    function updateHardeningUI(level) {
-       
+    updateHardeningUI(level) {
         const statusText = level === 'off' ? 'OFF' : level.toUpperCase();
-        hardeningStatus.textContent = statusText;
-        
-       
-        hardeningStatus.className = '';
-        switch (level) {
-            case 'mega':
-                hardeningStatus.style.background = '#fed7d7';
-                hardeningStatus.style.color = '#c53030';
-                hardeningStatus.style.borderColor = '#fc8181';
-                break;
-            case 'medium':
-                hardeningStatus.style.background = '#fef5e7';
-                hardeningStatus.style.color = '#c05621';
-                hardeningStatus.style.borderColor = '#fbd38d';
-                break;
-            case 'low':
-                hardeningStatus.style.background = '#fefcbf';
-                hardeningStatus.style.color = '#b7791f';
-                hardeningStatus.style.borderColor = '#f6e05e';
-                break;
-            default:
-                hardeningStatus.style.background = '#e6fffa';
-                hardeningStatus.style.color = '#2f855a';
-                hardeningStatus.style.borderColor = '#9ae6b4';
-                break;
-        }
+        this.elements.hardeningStatus.textContent = statusText;
 
-       
-        document.querySelectorAll('.hardening-btn').forEach(btn => {
-            btn.classList.remove('active');
-        });
         
+        this.elements.hardeningStatus.classList.remove('hardening-mega', 'hardening-medium', 'hardening-low', 'hardening-off');
+        this.elements.hardeningStatus.classList.add(level === 'off' ? 'hardening-off' : `hardening-${level}`);
+
+        document.querySelectorAll('.hardening-btn').forEach(btn => btn.classList.remove('active'));
         const activeBtn = document.querySelector(`[data-level="${level}"]`);
-        if (activeBtn) {
-            activeBtn.classList.add('active');
-        }
+        if (activeBtn) activeBtn.classList.add('active');
 
-       
-        updateHardeningInfo(level);
+        this.updateHardeningInfo(level);
     }
 
-    function updateHardeningInfo(level) {
-        const levelInfo = getHardeningLevelInfo(level);
-        
+    updateHardeningInfo(level) {
+        const levelInfo = this.getHardeningLevelInfo(level);
+
         if (level === 'off') {
-            hardeningInfo.style.display = 'none';
-            hardeningStats.style.display = 'none';
+            this.elements.hardeningInfo.style.display = 'none';
+            this.elements.hardeningStats.style.display = 'none';
         } else {
-            hardeningInfo.style.display = 'block';
-            hardeningInfoTitle.textContent = levelInfo.name;
-            hardeningInfoDesc.textContent = levelInfo.description;
-            hardeningInfoDetails.textContent = levelInfo.details;
+            this.elements.hardeningInfo.style.display = 'block';
+            this.elements.hardeningInfoTitle.textContent = levelInfo.name;
+            this.elements.hardeningInfoDesc.textContent = levelInfo.description;
+            this.elements.hardeningInfoDetails.textContent = levelInfo.details;
         }
     }
 
-    function getHardeningLevelInfo(level) {
+    getHardeningLevelInfo(level) {
         const levelInfoMap = {
             mega: {
                 name: 'Mega Protection',
@@ -1399,7 +871,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 details: 'Blocks: All JS, Iframes, Objects, Forms, Event handlers, Dangerous attributes, Web APIs'
             },
             medium: {
-                name: 'Medium Protection', 
+                name: 'Medium Protection',
                 description: 'Balanced security - blocks dangerous scripts while preserving functionality',
                 details: 'Blocks: Inline scripts, Iframes, Objects, Event handlers, Dangerous attributes'
             },
@@ -1414,41 +886,223 @@ document.addEventListener('DOMContentLoaded', async () => {
                 details: 'No blocking applied'
             }
         };
-        
         return levelInfoMap[level] || levelInfoMap.off;
     }
 
-    function getHardeningLevelName(level) {
-        const names = {
-            mega: 'Mega',
-            medium: 'Medium', 
-            low: 'Low',
-            off: 'Off'
-        };
+    getHardeningLevelName(level) {
+        const names = { mega: 'Mega', medium: 'Medium', low: 'Low', off: 'Off' };
         return names[level] || 'Unknown';
     }
 
-    async function loadHardeningStatus() {
-        if (!currentTab || !canScanPage(currentTab.url)) {
-            hardeningStats.style.display = 'none';
+    async loadHardeningStatus() {
+        if (!this.state.currentTab || !this.canScanPage(this.state.currentTab.url)) {
+            this.elements.hardeningStats.style.display = 'none';
             return;
         }
 
         try {
-            const response = await chrome.tabs.sendMessage(currentTab.id, {
-                type: 'GET_HARDENING_STATUS'
-            });
+            const response = await chrome.tabs.sendMessage(this.state.currentTab.id, { type: 'GET_HARDENING_STATUS' });
 
-            if (response && response.active) {
-                hardeningStats.style.display = 'block';
-                blockedElementsCount.textContent = response.blockedCount || 0;
+            if (response?.active) {
+                this.elements.hardeningStats.style.display = 'block';
+                this.elements.blockedElementsCount.textContent = response.blockedCount || 0;
             } else {
-                hardeningStats.style.display = 'none';
+                this.elements.hardeningStats.style.display = 'none';
             }
         } catch (error) {
             console.error('Failed to get hardening status:', error);
-            hardeningStats.style.display = 'none';
+            this.elements.hardeningStats.style.display = 'none';
         }
     }
 
+    
+    async loadCommunityStats() {
+        if (!this.state.currentTab || !this.canScanPage(this.state.currentTab.url)) {
+            this.showNoStatsAvailable();
+            return;
+        }
+
+        try {
+            const url = new URL(`${FEEDBACK_API_URL}/stats`);
+            url.searchParams.append('url', this.state.currentTab.url);
+
+            const response = await fetch(url.toString(), {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            if (response.ok) {
+                const stats = await response.json();
+                this.displayCommunityStats(stats);
+            } else {
+                this.showNoStatsAvailable();
+            }
+        } catch (error) {
+            console.error('Failed to load community stats:', error);
+            this.showNoStatsAvailable();
+        }
+    }
+
+    displayCommunityStats(stats) {
+        this.elements.communityConfidence.textContent = stats.confidence_level || 'Unknown';
+        const percentage = Number.parseFloat(stats.safety_percentage) || 0;
+        this.elements.meterFill.style.width = `${100 - percentage}%`;
+        this.elements.meterPercentage.textContent = `${percentage}% Safe`;
+        this.elements.safeVotes.textContent = `👍 ${stats.safe_votes || 0}`;
+        this.elements.unsafeVotes.textContent = `👎 ${stats.unsafe_votes || 0}`;
+
+        
+        this.elements.communityConfidence.classList.remove('high', 'medium', 'low', 'no-data');
+        const confidence = (stats.confidence_level || '').toLowerCase();
+        if (!stats.confidence_level) {
+            this.elements.communityConfidence.classList.add('no-data');
+        } else if (confidence.includes('very high') || confidence.includes('high')) {
+            this.elements.communityConfidence.classList.add('high');
+        } else if (confidence.includes('medium')) {
+            this.elements.communityConfidence.classList.add('medium');
+        } else {
+            this.elements.communityConfidence.classList.add('low');
+        }
+
+        
+        this.elements.meterFill.classList.remove('safe', 'warning', 'danger');
+        if (percentage >= 70) {
+            this.elements.meterFill.classList.add('safe');
+        } else if (percentage >= 40) {
+            this.elements.meterFill.classList.add('warning');
+        } else {
+            this.elements.meterFill.classList.add('danger');
+        }
+    }
+
+    showNoStatsAvailable() {
+        this.elements.communityConfidence.textContent = 'No Data';
+        this.elements.communityConfidence.classList.remove('high','medium','low');
+        this.elements.communityConfidence.classList.add('no-data');
+        this.elements.meterPercentage.textContent = '--';
+        this.elements.safeVotes.textContent = '👍 0';
+        this.elements.unsafeVotes.textContent = '👎 0';
+        this.elements.meterFill.style.width = '0%';
+        this.elements.meterFill.classList.remove('safe','warning','danger');
+    }
+
+    async submitFeedback(isSafe) {
+        if (!this.state.currentTab || !this.canScanPage(this.state.currentTab.url)) {
+            this.elements.feedbackStatus.textContent = 'Cannot submit feedback for this page';
+            this.elements.feedbackStatus.className = 'feedback-status error';
+            return;
+        }
+
+        this.elements.safeFeedbackBtn.disabled = true;
+        this.elements.unsafeFeedbackBtn.disabled = true;
+        this.elements.feedbackStatus.textContent = 'Submitting feedback...';
+        this.elements.feedbackStatus.className = 'feedback-status loading';
+
+        try {
+            const response = await fetch(`${FEEDBACK_API_URL}/feedback`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: this.state.currentTab.url,
+                    is_safe: isSafe,
+                    user_agent: navigator.userAgent
+                })
+            });
+
+            const result = await response.json();
+
+            if (response.ok && result.success) {
+                this.elements.feedbackStatus.textContent = 'Thank you for your feedback!';
+                this.elements.feedbackStatus.className = 'feedback-status success';
+
+                if (isSafe) {
+                    this.elements.safeFeedbackBtn.classList.add('active');
+                    this.elements.unsafeFeedbackBtn.classList.remove('active');
+                } else {
+                    this.elements.unsafeFeedbackBtn.classList.add('active');
+                    this.elements.safeFeedbackBtn.classList.remove('active');
+                }
+
+                setTimeout(() => this.loadCommunityStats(), 1000);
+            } else {
+                this.elements.feedbackStatus.textContent = result.message || 'Failed to submit feedback';
+                this.elements.feedbackStatus.className = 'feedback-status error';
+
+                if (result.message?.includes('already submitted')) {
+                    this.elements.feedbackStatus.textContent = 'You have already voted for this website';
+                    this.elements.feedbackStatus.className = 'feedback-status error';
+                }
+            }
+        } catch (error) {
+            console.error('Failed to submit feedback:', error);
+            this.elements.feedbackStatus.textContent = 'Network error occurred';
+            this.elements.feedbackStatus.className = 'feedback-status error';
+        } finally {
+            setTimeout(() => {
+                this.elements.safeFeedbackBtn.disabled = false;
+                this.elements.unsafeFeedbackBtn.disabled = false;
+            }, 2000);
+        }
+    }
+
+    
+    updateStatus(text, type) {
+        this.elements.statusText.textContent = text;
+
+        
+        this.elements.statusIndicator.className = 'status-indicator';
+        if (type === 'scanning') {
+            this.elements.statusIndicator.classList.add('scanning');
+        } else if (type === 'error' || type === 'warning' || type === 'issues') {
+            this.elements.statusIndicator.classList.add('issues');
+        }
+    }
+
+    updateStatusWithCounts(totalCount, counts) {
+        if (totalCount === 0) {
+            this.elements.statusText.textContent = 'No issues found';
+            this.elements.statusIndicator.className = 'status-indicator';
+            return;
+        }
+
+        let statusParts = [];
+        if (counts.critical > 0) statusParts.push(`${counts.critical} Critical`);
+        if (counts.high > 0) statusParts.push(`${counts.high} High`);
+        if (counts.medium > 0) statusParts.push(`${counts.medium} Medium`);
+        if (counts.low > 0) statusParts.push(`${counts.low} Low`);
+
+        if (statusParts.length > 0) {
+            this.elements.statusText.textContent = statusParts.join(', ');
+        } else {
+            this.elements.statusText.textContent = `${totalCount} issue${totalCount > 1 ? 's' : ''} found`;
+        }
+
+        const highestSeverity = this.getHighestSeverity(counts);
+        if (highestSeverity === 'critical') {
+            this.elements.statusIndicator.className = 'status-indicator issues';
+        } else if (highestSeverity === 'high' || highestSeverity === 'medium') {
+            this.elements.statusIndicator.className = 'status-indicator scanning';
+        } else {
+            this.elements.statusIndicator.className = 'status-indicator';
+        }
+    }
+
+    getHighestSeverity(counts) {
+        if (counts.critical > 0) return 'critical';
+        if (counts.high > 0) return 'high';
+        if (counts.medium > 0) return 'medium';
+        if (counts.low > 0) return 'low';
+        return 'none';
+    }
+
+    canScanPage(url) {
+        if (!url) return false;
+        const unscannable = ['chrome://', 'chrome-extension://', 'moz-extension://', 'about:', 'file://', 'data:', 'blob:', 'javascript:'];
+        return !unscannable.some(prefix => url.startsWith(prefix));
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const popup = new PopupManager();
+    popup.init();
 }); 

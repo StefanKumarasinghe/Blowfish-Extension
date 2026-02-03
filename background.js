@@ -59,11 +59,10 @@ chrome.runtime.onInstalled.addListener((details) => {
 });
 
 
-loadWhitelist();
-
+(async () => { try { await loadWhitelist(); } catch (e) { console.error('Failed to load whitelist on startup:', e); } })();
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    if (changeInfo.status === 'complete' && tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+    if (changeInfo.status === 'complete' && tab.url && canScanUrl(tab.url)) {
         
         if (isWhitelisted(tab.url)) {
             console.log('Skipping scan for whitelisted site:', tab.url);
@@ -197,7 +196,7 @@ async function injectContentScriptWithRetry(tabId, retryCount = 0) {
         });
         
         
-        const testResponse = await Promise.race([
+        await Promise.race([
             chrome.tabs.sendMessage(tabId, { type: 'PING' }),
             new Promise((_, reject) => 
                 setTimeout(() => reject(new Error('Content script ping timeout')), CONTENT_SCRIPT_READY_TIMEOUT)
@@ -366,10 +365,9 @@ async function handleScanError(tabId, url, error) {
 
 function createFallbackContentScript() {
     
-    if (!window.contentScriptReady) {
-        window.contentScriptReady = true;
-        
-        
+    if (!globalThis.contentScriptReady) {
+        globalThis.contentScriptReady = true;
+
         chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             try {
                 switch (message.type) {
@@ -377,52 +375,40 @@ function createFallbackContentScript() {
                         sendResponse({ success: true });
                         break;
                     case 'UPDATE_SCANNER_SETTINGS':
-                        
-                        window.dispatchEvent(new CustomEvent('updateScannerSettings', {
-                            detail: message.settings
-                        }));
+                        globalThis.dispatchEvent(new CustomEvent('updateScannerSettings', { detail: message.settings }));
                         sendResponse({ success: true });
                         break;
                     case 'TRIGGER_MANUAL_SCAN':
-                        
-                        window.dispatchEvent(new CustomEvent('manualScanTrigger'));
+                        globalThis.dispatchEvent(new CustomEvent('manualScanTrigger'));
                         sendResponse({ success: true });
                         break;
                     case 'STOP_SCANNER':
-                        
-                        window.dispatchEvent(new CustomEvent('stopScanner'));
+                        globalThis.dispatchEvent(new CustomEvent('stopScanner'));
                         sendResponse({ success: true });
                         break;
                     default:
                         sendResponse({ success: false, error: 'Unknown message type' });
                 }
             } catch (error) {
-                console.error('Content script message handler error:', error);
+                console.debug('Content script message handler error:', error);
                 sendResponse({ success: false, error: error.message });
             }
             return true;
         });
-        
-        
-        window.addEventListener('securityScanProgress', (event) => {
+
+        globalThis.addEventListener('securityScanProgress', (event) => {
             try {
-                chrome.runtime.sendMessage({
-                    type: 'SCAN_PROGRESS',
-                    data: event.detail
-                });
+                chrome.runtime.sendMessage({ type: 'SCAN_PROGRESS', data: event.detail });
             } catch (error) {
-                console.error('Failed to send scan progress:', error);
+                console.debug('Failed to send scan progress:', error);
             }
         });
 
-        window.addEventListener('securityScanComplete', (event) => {
+        globalThis.addEventListener('securityScanComplete', (event) => {
             try {
-                chrome.runtime.sendMessage({
-                    type: 'SCAN_COMPLETE',
-                    data: event.detail
-                });
+                chrome.runtime.sendMessage({ type: 'SCAN_COMPLETE', data: event.detail });
             } catch (error) {
-                console.error('Failed to send scan complete:', error);
+                console.debug('Failed to send scan complete:', error);
             }
         });
         
@@ -450,7 +436,7 @@ function canScanUrl(url) {
 
 
 chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
-    const tabId = sender.tab?.id;
+    const tabId = message.tabId ?? sender.tab?.id;
     
     switch (message.type) {
         case 'SCAN_COMPLETE':
@@ -470,7 +456,7 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
             break;
             
         case 'START_MANUAL_SCAN':
-            
+            console.log('Received START_MANUAL_SCAN for tab:', tabId);
             handleManualScan(tabId, sender);
             break;
             
@@ -509,11 +495,9 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
                         
                         
                         try {
-                            chrome.tabs.sendMessage(tab.id, {
-                                type: 'STOP_SCANNER'
-                            });
+                            chrome.tabs.sendMessage(tab.id, { type: 'STOP_SCANNER' });
                         } catch (error) {
-                            
+                            console.debug('Failed to send STOP_SCANNER to tab', tab.id, error);
                         }
                     }
                 });
@@ -539,12 +523,9 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
                     tabs.forEach(tab => {
                         if (canScanUrl(tab.url)) {
                             try {
-                                chrome.tabs.sendMessage(tab.id, {
-                                    type: 'UPDATE_HARDENING',
-                                    level: message.level
-                                });
+                                chrome.tabs.sendMessage(tab.id, { type: 'UPDATE_HARDENING', level: message.level });
                             } catch (error) {
-                                
+                                console.debug('Failed to send UPDATE_HARDENING to tab', tab.id, error);
                             }
                         }
                     });
@@ -563,35 +544,33 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
 
 
 async function handleManualScan(tabId, sender) {
-    
-    if (!tabId) {
-        chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
-            if (tabs[0]) {
-                
-                try {
-                    await chrome.tabs.sendMessage(tabs[0].id, {
-                        type: 'TRIGGER_MANUAL_SCAN'
-                    });
-                } catch (error) {
-                    console.log('Content script not ready, proceeding with direct scan');
-                }
-                
-                startScan(tabs[0].id, tabs[0].url, true);
-            }
-        });
-    } else {
-        
+    if (tabId) {
         try {
-            await chrome.tabs.sendMessage(tabId, {
-                type: 'TRIGGER_MANUAL_SCAN'
-            });
+            await chrome.tabs.sendMessage(tabId, { type: 'TRIGGER_MANUAL_SCAN' });
         } catch (error) {
-            console.log('Content script not ready, proceeding with direct scan');
+            console.debug('Content script not ready, proceeding with direct scan', error);
         }
-        
-        startScan(tabId, sender.tab.url, true);
+        try {
+            const tab = await chrome.tabs.get(tabId);
+            startScan(tabId, tab?.url || '', true);
+        } catch (e) {
+            console.debug('Could not retrieve tab info, proceeding without URL', e);
+            startScan(tabId, '', true);
+        }
+        return;
     }
-}
+
+    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+        const t = tabs[0];
+        if (!t) return;
+        try {
+            await chrome.tabs.sendMessage(t.id, { type: 'TRIGGER_MANUAL_SCAN' });
+        } catch (error) {
+            console.debug('Content script not ready, proceeding with direct scan', error);
+        }
+        startScan(t.id, t.url, true);
+    });
+} 
 
 
 function handleScanComplete(tabId, data) {
@@ -651,11 +630,11 @@ function updateBadge(tabId, count) {
             });
             
             
-            const color = count >= 5 ? '#c53030' : count >= 2 ? '#dd6b20' : '#d69e2e';
-            chrome.action.setBadgeBackgroundColor({
-                tabId: tabId,
-                color: color
-            });
+            let color;
+            if (count >= 5) color = '#c53030';
+            else if (count >= 2) color = '#dd6b20';
+            else color = '#d69e2e';
+            chrome.action.setBadgeBackgroundColor({ tabId: tabId, color });
         }
     } catch (error) {
         console.error('Error updating badge:', error);
@@ -663,43 +642,29 @@ function updateBadge(tabId, count) {
 }
 
 
+function buildNotificationText(data) {
+    const count = data.vulnerabilityCount || 0;
+    if (count === 0) return { title: 'Security Scan Complete', message: 'No security issues detected on this page.' };
+
+    const critical = data.severityCounts?.critical || 0;
+    const high = data.severityCounts?.high || 0;
+    const title = `${count} Security Issue${count > 1 ? 's' : ''} Found`;
+    if (critical > 0) return { title, message: `${critical} critical issue${critical > 1 ? 's' : ''} detected. Click to view details.` };
+    if (high > 0) return { title, message: `${high} high-priority issue${high > 1 ? 's' : ''} detected. Click to view details.` };
+    return { title, message: 'Security issues detected. Click to view details.' };
+}
+
 async function showNotification(tabId, data) {
     if (!chrome.notifications) return;
-    
     try {
         const settings = await chrome.storage.sync.get(['showNotifications']);
         if (!settings.showNotifications) return;
-        
-        const count = data.vulnerabilityCount || 0;
-        let title, message;
-        
-        if (count === 0) {
-            title = 'Security Scan Complete';
-            message = 'No security issues detected on this page.';
-        } else {
-            title = `${count} Security Issue${count > 1 ? 's' : ''} Found`;
-            const critical = data.severityCounts?.critical || 0;
-            const high = data.severityCounts?.high || 0;
-            
-            if (critical > 0) {
-                message = `${critical} critical issue${critical > 1 ? 's' : ''} detected. Click to view details.`;
-            } else if (high > 0) {
-                message = `${high} high-priority issue${high > 1 ? 's' : ''} detected. Click to view details.`;
-            } else {
-                message = 'Security issues detected. Click to view details.';
-            }
-        }
-        
-        chrome.notifications.create(`scan-${tabId}`, {
-            type: 'basic',
-            iconUrl: 'icon48.png',
-            title: title,
-            message: message
-        });
+        const { title, message } = buildNotificationText(data);
+        chrome.notifications.create(`scan-${tabId}`, { type: 'basic', iconUrl: 'icons/icon48.png', title, message });
     } catch (error) {
         console.error('Error showing notification:', error);
     }
-}
+} 
 
 
 function clearScanResults(tabId) {
@@ -735,8 +700,8 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 if (chrome.notifications) {
     chrome.notifications.onClicked.addListener((notificationId) => {
         if (notificationId.startsWith('scan-')) {
-            const tabId = parseInt(notificationId.replace('scan-', ''));
-            chrome.tabs.update(tabId, { active: true });
+            const tabId = Number.parseInt(notificationId.replace('scan-', ''), 10);
+            if (!Number.isNaN(tabId)) chrome.tabs.update(tabId, { active: true });
             chrome.notifications.clear(notificationId);
         }
     });
@@ -755,45 +720,32 @@ setInterval(() => {
 }, 60 * 60 * 1000); 
 
 
+async function broadcastSettingsToTabs() {
+    const settings = await chrome.storage.sync.get(['hideBubble', 'showHighlights']);
+    const tabs = await chrome.tabs.query({});
+    for (const tab of tabs) {
+        try {
+            await chrome.tabs.sendMessage(tab.id, { type: 'UPDATE_SCANNER_SETTINGS', settings });
+        } catch (error) {
+            console.debug('Failed to broadcast settings to tab', tab.id, error);
+        }
+    }
+}
+
+async function broadcastHardeningToTabs(value) {
+    const tabs = await chrome.tabs.query({});
+    for (const tab of tabs) {
+        if (!canScanUrl(tab.url)) continue;
+        try {
+            await chrome.tabs.sendMessage(tab.id, { type: 'UPDATE_HARDENING', level: value });
+        } catch (error) {
+            console.debug('Failed to broadcast hardening to tab', tab.id, error);
+        }
+    }
+}
+
 async function handleSettingsUpdate(setting, value) {
     console.log(`Setting ${setting} updated to:`, value);
-    
-    
-    if (['hideBubble', 'showHighlights'].includes(setting)) {
-        const settings = await chrome.storage.sync.get([
-            'hideBubble', 
-            'showHighlights'
-        ]);
-        
-        
-        const tabs = await chrome.tabs.query({});
-        for (const tab of tabs) {
-            try {
-                await chrome.tabs.sendMessage(tab.id, {
-                    type: 'UPDATE_SCANNER_SETTINGS',
-                    settings: settings
-                });
-            } catch (error) {
-                
-            }
-        }
-    }
-    
-    
-    if (setting === 'hardeningLevel') {
-        
-        const tabs = await chrome.tabs.query({});
-        for (const tab of tabs) {
-            if (canScanUrl(tab.url)) {
-                try {
-                    await chrome.tabs.sendMessage(tab.id, {
-                        type: 'UPDATE_HARDENING',
-                        level: value
-                    });
-                } catch (error) {
-                    
-                }
-            }
-        }
-    }
+    if (['hideBubble', 'showHighlights'].includes(setting)) await broadcastSettingsToTabs();
+    if (setting === 'hardeningLevel') await broadcastHardeningToTabs(value);
 } 

@@ -55,7 +55,7 @@
   
   "web_accessible_resources": [
     {
-      "resources": ["scanner.js", "hardening.js"],
+      "resources": ["scanner.js", "hardening.js", "scanner/*.js"],
       "matches": ["<all_urls>"]
     }
   ]

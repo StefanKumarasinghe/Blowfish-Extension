@@ -1,8 +1,92 @@
-// Content script for Advanced Web Security Scanner Pro
-
 let scannerInjected = false;
 let scanResults = null;
 let highlightOverlays = new Map();
+
+// Robust messaging: handle cases where extension context becomes invalidated (e.g., extension reload)
+let extensionContextValid = !!(typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id);
+const pendingMessages = [];
+let flushInterval = null;
+
+function isExtensionAvailable() {
+    return !!(typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id);
+}
+
+function safeSendMessage(message) {
+    try {
+        if (isExtensionAvailable()) {
+            // Attempt to send and handle runtime.lastError in a callback
+            chrome.runtime.sendMessage(message, (response) => {
+                if (chrome.runtime.lastError) {
+                    console.warn('sendMessage failed:', chrome.runtime.lastError.message);
+                    extensionContextValid = false;
+                    // Queue the message for retry
+                    pendingMessages.push(message);
+                    startFlushTimer();
+                }
+            });
+            extensionContextValid = true;
+            return true;
+        } else {
+            // Extension not available - queue message and start retry loop
+            extensionContextValid = false;
+            pendingMessages.push(message);
+            startFlushTimer();
+            console.warn('Extension context invalidated. Queuing message.');
+            return false;
+        }
+    } catch (err) {
+        console.warn('Failed to send message (exception):', err && err.message ? err.message : err);
+        extensionContextValid = false;
+        pendingMessages.push(message);
+        startFlushTimer();
+        return false;
+    }
+}
+
+function startFlushTimer() {
+    if (flushInterval) return;
+    flushInterval = setInterval(() => {
+        if (isExtensionAvailable() && pendingMessages.length > 0) {
+            const messagesToSend = pendingMessages.splice(0, pendingMessages.length);
+            messagesToSend.forEach(msg => {
+                try {
+                    chrome.runtime.sendMessage(msg, (response) => {
+                        if (chrome.runtime.lastError) {
+                            console.warn('Retry sendMessage failed:', chrome.runtime.lastError.message);
+                            // push back to pending
+                            pendingMessages.push(msg);
+                        }
+                    });
+                } catch (err) {
+                    pendingMessages.push(msg);
+                }
+            });
+            if (pendingMessages.length === 0) {
+                clearInterval(flushInterval);
+                flushInterval = null;
+                extensionContextValid = true;
+            }
+        }
+    }, 3000);
+}
+
+// Listen for visibility/focus to attempt immediate flush
+window.addEventListener('focus', () => {
+    if (isExtensionAvailable() && pendingMessages.length > 0) startFlushTimer();
+});
+
+// Stop flush on unload
+window.addEventListener('beforeunload', () => {
+    if (flushInterval) {
+        clearInterval(flushInterval);
+        flushInterval = null;
+    }
+});
+
+// Test/debug accessor: returns number of queued messages (safe to remove in prod)
+window.__getQueuedMessageCount = function() {
+    return pendingMessages.length;
+};
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     try {
@@ -18,9 +102,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             case 'UPDATE_SCANNER_SETTINGS':
              
                 try {
-                    window.dispatchEvent(new CustomEvent('updateScannerSettings', {
-                        detail: message.settings
-                    }));
+                    globalThis.dispatchEvent(new CustomEvent('updateScannerSettings', { detail: message.settings }));
                     sendResponse({ success: true });
                 } catch (error) {
                     console.error('Failed to forward settings to scanner:', error);
@@ -31,7 +113,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             case 'TRIGGER_MANUAL_SCAN':
              
                 try {
-                    window.dispatchEvent(new CustomEvent('manualScanTrigger'));
+                    globalThis.dispatchEvent(new CustomEvent('manualScanTrigger'));
                     sendResponse({ success: true });
                 } catch (error) {
                     console.error('Failed to trigger manual scan:', error);
@@ -42,7 +124,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             case 'STOP_SCANNER':
              
                 try {
-                    window.dispatchEvent(new CustomEvent('stopScanner'));
+                    globalThis.dispatchEvent(new CustomEvent('stopScanner'));
                     sendResponse({ success: true });
                 } catch (error) {
                     console.error('Failed to stop scanner:', error);
@@ -84,45 +166,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // Listen for scanner events from the injected script with improved error handling
-window.addEventListener('securityScanProgress', (event) => {
+globalThis.addEventListener('securityScanProgress', (event) => {
     try {
         if (event.detail) {
-            chrome.runtime.sendMessage({
-                type: 'SCAN_PROGRESS',
-                data: event.detail
-            }).catch(error => {
-                console.error('Failed to send scan progress:', error);
-             
-            });
+            // Use safeSendMessage which queues and retries if extension context is invalid
+            safeSendMessage({ type: 'SCAN_PROGRESS', data: event.detail });
         }
     } catch (error) {
         console.error('Failed to send scan progress:', error);
     }
 });
 
-window.addEventListener('securityScanComplete', (event) => {
+globalThis.addEventListener('securityScanComplete', (event) => {
     try {
         if (event.detail) {
             scanResults = event.detail;
-            chrome.runtime.sendMessage({
-                type: 'SCAN_COMPLETE',
-                data: event.detail
-            }).catch(error => {
-                console.error('Failed to send scan complete:', error);
-             
-                console.log('Scan results stored locally due to communication error:', scanResults);
-            });
+            // Queue/send using safeSendMessage to avoid exceptions when extension reloads
+            safeSendMessage({ type: 'SCAN_COMPLETE', data: event.detail });
         }
     } catch (error) {
         console.error('Failed to send scan complete:', error);
     }
 });
 
-// Check if this is a page that can be scanned
 function canScanPage() {
-    const url = window.location.href;
-    return !url.startsWith('chrome://') && 
-           !url.startsWith('chrome-extension://') && 
+    const url = globalThis.location.href;
+    return !url.startsWith('chrome://') &&
+           !url.startsWith('chrome-extension://') &&
            !url.startsWith('moz-extension://') &&
            !url.startsWith('about:') &&
            !url.startsWith('file://');
@@ -137,10 +207,11 @@ window.addEventListener('beforeunload', () => {
 
 // Element highlighting functions
 function highlightElement(issue, issueIndex) {
-    if (!issue.details || !issue.details.evidence) {
-        throw new Error('No evidence data for highlighting');
+    if (!issue.details?.evidence) {
+        console.warn('No evidence for highlight', issue);
+        return;
     }
-    
+
     issue.details.evidence.forEach((evidence, evidenceIndex) => {
         if (evidence.element || evidence.selector) {
             const selector = evidence.selector || evidence.element;
@@ -194,14 +265,13 @@ function addHighlight(issueIndex, issue) {
  
     issue.details.evidence.forEach(evidence => {
         if (evidence.selector) {
-            try {
-                const found = document.querySelectorAll(evidence.selector);
-                elements.push(...found);
-            } catch (e) {
-                console.warn('Invalid selector:', evidence.selector);
-            }
-        } else if (evidence.element) {
-         
+                try {
+                    const found = document.querySelectorAll(evidence.selector);
+                    elements.push(...found);
+                } catch (e) {
+                    console.warn('Invalid selector:', evidence.selector, e);
+                }
+            } else if (evidence.element) {
             elements.push(evidence.element);
         } else if (evidence.code) {
          
@@ -218,7 +288,7 @@ function addHighlight(issueIndex, issue) {
  
     const overlays = [];
     elements.forEach((element, index) => {
-        if (element && element.getBoundingClientRect) {
+        if (element?.getBoundingClientRect) {
             const overlay = createHighlightOverlay(element, issue.severity, `${issue.message} (${index + 1})`);
             if (overlay) {
                 overlays.push(overlay);
@@ -307,28 +377,19 @@ function getSeverityColor(severity) {
 
 function clearAllHighlights() {
     highlightOverlays.forEach((overlays) => {
-        overlays.forEach(overlay => {
-            if (overlay.parentNode) {
-                overlay.parentNode.removeChild(overlay);
-            }
-        });
+        overlays.forEach(overlay => overlay?.remove());
     });
     highlightOverlays.clear();
 }
 
-// Initialize content script
 console.log('Advanced Web Security Scanner Pro content script loaded');
 
-// Handle page navigation
-let lastUrl = location.href;
+let lastUrl = globalThis.location.href;
 new MutationObserver(() => {
-    const url = location.href;
+    const url = globalThis.location.href;
     if (url !== lastUrl) {
         lastUrl = url;
-     
         scanResults = null;
-     
-        const allHighlights = document.querySelectorAll('[id^="security-highlight-"]');
-        allHighlights.forEach(highlight => highlight.remove());
+        document.querySelectorAll('[id^="security-highlight-"]').forEach(h => h.remove());
     }
 }).observe(document, { subtree: true, childList: true }); 

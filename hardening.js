@@ -1,9 +1,10 @@
-// Blowfish ASE - Web Hardening Protection System
-
-(function() {
+(function(){
     'use strict';
 
-    console.log('🛡️ Hardening script loading at', document.readyState, 'on', window.location.href);
+    const thisGlobal = (typeof globalThis !== 'undefined') ? globalThis : (typeof window !== 'undefined') ? window : (typeof self !== 'undefined') ? self : {};
+    const gw = thisGlobal; 
+
+    console.log('🛡️ Hardening script loading at', document.readyState, 'on', gw.location.href);
 
     let hardeningLevel = 'off';
     let protectionActive = false;
@@ -12,12 +13,12 @@
     let originalAPIs = {};
     let cspInjected = false;
     let earlyBlockingActive = false;
-    let initializationPromise = null;
 
 
-    window.hardeningActive = false;
-    window.hardeningLevel = 'off';
-    window.hardeningBlockedCount = 0;
+
+    gw.hardeningActive = false;
+    gw.hardeningLevel = 'off';
+    gw.hardeningBlockedCount = 0;
 
 
     const ORIGINAL_METHODS = {
@@ -25,13 +26,13 @@
         appendChild: Node.prototype.appendChild,
         insertBefore: Node.prototype.insertBefore,
         setAttribute: Element.prototype.setAttribute,
-        eval: window.eval,
-        Function: window.Function,
-        setTimeout: window.setTimeout,
-        setInterval: window.setInterval,
-        XMLHttpRequest: window.XMLHttpRequest,
-        fetch: window.fetch,
-        WebSocket: window.WebSocket
+        eval: gw.eval,
+        Function: gw.Function,
+        setTimeout: gw.setTimeout,
+        setInterval: gw.setInterval,
+        XMLHttpRequest: gw.XMLHttpRequest,
+        fetch: gw.fetch,
+        WebSocket: gw.WebSocket
     };
 
 
@@ -46,7 +47,7 @@
             activateEmergencyProtection(cached);
         }
     } catch (e) {
-        console.log('🛡️ No cached hardening level available');
+        console.log('🛡️ No cached hardening level available', e);
     }
 
 
@@ -111,8 +112,10 @@
         }
     };
 
+    const getTrustedSources = () => TRUSTED_DOMAINS.map(d => `https://*.${d} https://${d}`).join(' ');
 
-    initializationPromise = init();
+
+    init();
 
     function activateEmergencyProtection(level) {
         console.log('🛡️ EMERGENCY: Activating immediate protection for level:', level);
@@ -133,8 +136,8 @@
         activateEarlyBlockingImmediate(config);
         
         protectionActive = true;
-        window.hardeningActive = true;
-        window.hardeningLevel = level;
+        gw.hardeningActive = true;
+        gw.hardeningLevel = level;
         console.log('🛡️ EMERGENCY: Protection activated immediately');
     }
 
@@ -142,42 +145,38 @@
         try {
             if (config.blockJavaScript) {
             
-                window.eval = function() {
+                gw.eval = function(){
                     console.log('🛡️ eval() blocked by emergency hardening');
                     throw new Error('eval() is disabled by Blowfish ASE Hardening');
                 };
-                
-                window.Function = function() {
+                gw.Function = function(){
                     console.log('🛡️ Function constructor blocked by emergency hardening');
                     throw new Error('Function constructor is disabled by Blowfish ASE Hardening');
                 };
 
             
-                window.setTimeout = function() {
+                gw.setTimeout = function(){
                     console.log('🛡️ setTimeout blocked by emergency hardening');
                     return 0;
                 };
-                
-                window.setInterval = function() {
+                gw.setInterval = function(){
                     console.log('🛡️ setInterval blocked by emergency hardening');
                     return 0;
                 };
 
             
-                window.XMLHttpRequest = function() {
+                gw.XMLHttpRequest = function(){
                     console.log('🛡️ XMLHttpRequest blocked by emergency hardening');
                     throw new Error('XMLHttpRequest is disabled by Blowfish ASE Hardening');
                 };
-
-                if (window.fetch) {
-                    window.fetch = function() {
+                if(gw.fetch){
+                    gw.fetch = function(){
                         console.log('🛡️ fetch blocked by emergency hardening');
                         return Promise.reject(new Error('fetch is disabled by Blowfish ASE Hardening'));
                     };
                 }
-
-                if (window.WebSocket) {
-                    window.WebSocket = function() {
+                if(gw.WebSocket){
+                    gw.WebSocket = function(){
                         console.log('🛡️ WebSocket blocked by emergency hardening');
                         throw new Error('WebSocket is disabled by Blowfish ASE Hardening');
                     };
@@ -198,8 +197,7 @@
                     meta.content = "script-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none';";
                 } else if (config.blockInlineScripts) {
                     if (config.allowTrustedDomains) {
-                        const trustedSources = TRUSTED_DOMAINS.map(domain => `https://*.${domain} https://${domain}`).join(' ');
-                        meta.content = `script-src 'self' ${trustedSources}; object-src 'none'; frame-src 'self' ${trustedSources};`;
+                        meta.content = `script-src 'self' ${getTrustedSources()}; object-src 'none'; frame-src 'self' ${getTrustedSources()};`;
                     } else {
                         meta.content = "script-src 'self'; object-src 'none'; frame-src 'self';";
                     }
@@ -227,14 +225,14 @@
                         console.log('🛡️ Script creation blocked:', tagName);
                         element.type = 'text/plain';
                         element.disabled = true;
-                        element.setAttribute('data-hardening-blocked', 'true');
+                        element.dataset.hardeningBlocked = 'true';
                         blockedElements.push({
                             element: element,
                             tag: tag,
                             reason: 'Script creation blocked',
                             timestamp: Date.now()
                         });
-                        window.hardeningBlockedCount = blockedElements.length;
+                        gw.hardeningBlockedCount = blockedElements.length;
                     }
                 }
                 
@@ -246,14 +244,14 @@
                     console.log('🛡️ Element creation blocked:', tagName);
                     element.style.display = 'none';
                     element.disabled = true;
-                    element.setAttribute('data-hardening-blocked', 'true');
+                    element.dataset.hardeningBlocked = 'true';
                     blockedElements.push({
                         element: element,
                         tag: tag,
                         reason: 'Element creation blocked',
                         timestamp: Date.now()
                     });
-                    window.hardeningBlockedCount = blockedElements.length;
+                    gw.hardeningBlockedCount = blockedElements.length;
                 }
                 
                 return element;
@@ -266,57 +264,105 @@
         }
     }
 
-    async function init() {
-        console.log('🛡️ Hardening init starting...');
+    async function loadHardeningLevel() {
         let loadedLevel = 'off';
         
         try {
-        
-            try {
-                const result = await chrome.storage.sync.get(['hardeningLevel']);
-                loadedLevel = result.hardeningLevel || 'off';
-                console.log('🛡️ Loaded hardening level from storage:', loadedLevel);
-            } catch (storageError) {
-                console.warn('🛡️ Storage access failed, trying alternative methods:', storageError);
-                
-            
-                try {
-                    const cached = sessionStorage.getItem('blowfish_hardening_level');
-                    if (cached) {
-                        loadedLevel = cached;
-                        console.log('🛡️ Using cached hardening level:', loadedLevel);
-                    }
-                } catch (sessionError) {
-                    console.warn('🛡️ Session storage also failed:', sessionError);
-                }
-            }
+            const result = await chrome.storage.sync.get(['hardeningLevel']);
+            loadedLevel = result.hardeningLevel || 'off';
+            console.log('🛡️ Loaded hardening level from storage:', loadedLevel);
+        } catch (storageError) {
+            console.warn('🛡️ Storage access failed, trying alternative methods:', storageError);
+            loadedLevel = loadLevelFromSessionStorage();
+        }
 
-        
-            try {
-                sessionStorage.setItem('blowfish_hardening_level', loadedLevel);
-            } catch (e) {
-                console.warn('🛡️ Could not cache hardening level');
-            }
+        try {
+            sessionStorage.setItem('blowfish_hardening_level', loadedLevel);
+        } catch (e) {
+            console.warn('🛡️ Could not cache hardening level', e);
+        }
 
+        return loadedLevel;
+    }
+
+    function loadLevelFromSessionStorage() {
+        try {
+            const cached = sessionStorage.getItem('blowfish_hardening_level');
+            if (cached) {
+                console.log('🛡️ Using cached hardening level:', cached);
+                return cached;
+            }
+        } catch (sessionError) {
+            console.warn('🛡️ Session storage also failed:', sessionError);
+        }
+        return 'off';
+    }
+
+    async function applyLoadedLevel(level) {
+        if (emergencyBlock && level !== 'off') {
+            console.log('🛡️ Emergency protection already active, upgrading to full protection...');
+            await activateProtection(level);
+        } else if (!emergencyBlock && level !== 'off') {
+            await activateProtection(level);
+        } else if (emergencyBlock && level === 'off') {
+            console.log('🛡️ Deactivating emergency protection...');
+            deactivateProtection();
+        }
+    }
+
+    function setupMessageListener() {
+        try {
+            chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+                console.log('🛡️ Received message:', message);
+                handleMessage(message, sendResponse);
+                return false;
+            });
+            console.log('🛡️ Message listener set up successfully');
+        } catch (error) {
+            console.error('🛡️ Error setting up message listener:', error);
+        }
+    }
+
+    function handleMessage(message, sendResponse) {
+        try {
+            if (message.type === 'UPDATE_HARDENING') {
+                handleUpdateHardening(message, sendResponse);
+            } else if (message.type === 'GET_HARDENING_STATUS') {
+                sendResponse({
+                    active: protectionActive,
+                    level: hardeningLevel,
+                    blockedCount: blockedElements.length
+                });
+            }
+        } catch (error) {
+            console.error('🛡️ Error processing message:', error);
+            sendResponse({ success: false, error: error.message });
+        }
+    }
+
+    function handleUpdateHardening(message, sendResponse) {
+        console.log('🛡️ Processing hardening update to level:', message.level);
+        updateHardeningLevel(message.level).then(() => {
+            console.log('🛡️ Hardening level updated successfully');
+            sendResponse({ success: true, level: hardeningLevel, active: protectionActive });
+        }).catch(error => {
+            console.error('🛡️ Error updating hardening level:', error);
+            sendResponse({ success: false, error: error.message });
+        });
+        return true;
+    }
+
+    async function init() {
+        console.log('🛡️ Hardening init starting...');
         
+        try {
+            const loadedLevel = await loadHardeningLevel();
             hardeningLevel = loadedLevel;
+            gw.hardeningLevel = loadedLevel;
             
-        
-            if (emergencyBlock && hardeningLevel !== 'off') {
-                console.log('🛡️ Emergency protection already active, upgrading to full protection...');
-                await activateProtection(hardeningLevel);
-            } else if (!emergencyBlock && hardeningLevel !== 'off') {
-            
-                await activateProtection(hardeningLevel);
-            } else if (emergencyBlock && hardeningLevel === 'off') {
-            
-                console.log('🛡️ Deactivating emergency protection...');
-                deactivateProtection();
-            }
-
+            await applyLoadedLevel(loadedLevel);
         } catch (error) {
             console.error('🛡️ Hardening init error:', error);
-        
             if (!emergencyBlock) {
                 console.log('🛡️ Fallback: Activating basic protection due to init error');
                 try {
@@ -327,57 +373,20 @@
             }
         }
 
-    
-        try {
-            chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-                console.log('🛡️ Received message:', message);
-                
-                try {
-                    if (message.type === 'UPDATE_HARDENING') {
-                        console.log('🛡️ Processing hardening update to level:', message.level);
-                        updateHardeningLevel(message.level).then(() => {
-                            console.log('🛡️ Hardening level updated successfully');
-                            sendResponse({ success: true, level: hardeningLevel, active: protectionActive });
-                        }).catch(error => {
-                            console.error('🛡️ Error updating hardening level:', error);
-                            sendResponse({ success: false, error: error.message });
-                        });
-                        return true; // Keep message channel open for async response
-                        
-                    } else if (message.type === 'GET_HARDENING_STATUS') {
-                        console.log('🛡️ Returning hardening status');
-                        sendResponse({
-                            active: protectionActive,
-                            level: hardeningLevel,
-                            blockedCount: blockedElements.length
-                        });
-                        return false; // Synchronous response
-                    }
-                } catch (error) {
-                    console.error('🛡️ Error processing message:', error);
-                    sendResponse({ success: false, error: error.message });
-                }
-                
-                return false;
-            });
-            console.log('🛡️ Message listener set up successfully');
-        } catch (error) {
-            console.error('🛡️ Error setting up message listener:', error);
-        }
-        
+        setupMessageListener();
         console.log('🛡️ Hardening init completed');
     }
 
     async function updateHardeningLevel(level) {
         console.log('🛡️ Updating hardening level to:', level);
         hardeningLevel = level;
-        window.hardeningLevel = level;
+        gw.hardeningLevel = level;
         
     
         try {
             sessionStorage.setItem('blowfish_hardening_level', level);
         } catch (e) {
-            console.warn('🛡️ Could not cache new hardening level');
+            console.warn('🛡️ Could not cache new hardening level', e);
         }
         
         if (level === 'off') {
@@ -398,8 +407,8 @@
         }
 
         protectionActive = true;
-        window.hardeningActive = true;
-        window.hardeningLevel = level;
+        gw.hardeningActive = true;
+        gw.hardeningLevel = level;
         blockedElements = [];
 
     
@@ -427,7 +436,7 @@
         }
 
     
-        window.hardeningBlockedCount = blockedElements.length;
+        gw.hardeningBlockedCount = blockedElements.length;
 
         console.log(`🛡️ Hardening activated: ${config.name}, blocked ${blockedElements.length} elements`);
     }
@@ -437,9 +446,9 @@
         protectionActive = false;
         emergencyBlock = false;
         blockedElements = [];
-        window.hardeningActive = false;
-        window.hardeningLevel = 'off';
-        window.hardeningBlockedCount = 0;
+        gw.hardeningActive = false;
+        gw.hardeningLevel = 'off';
+        gw.hardeningBlockedCount = 0;
 
     
         deactivateEarlyBlocking();
@@ -477,14 +486,14 @@
                     console.log('🛡️ Script creation blocked:', tagName);
                     element.type = 'text/plain';
                     element.disabled = true;
-                    element.setAttribute('data-hardening-blocked', 'true');
+                    element.dataset.hardeningBlocked = 'true';
                     blockedElements.push({
                         element: element,
                         tag: tag,
                         reason: 'Script creation blocked',
                         timestamp: Date.now()
                     });
-                    window.hardeningBlockedCount = blockedElements.length;
+                    gw.hardeningBlockedCount = blockedElements.length;
                 }
             }
             
@@ -496,14 +505,14 @@
                 console.log('🛡️ Element creation blocked:', tagName);
                 element.style.display = 'none';
                 element.disabled = true;
-                element.setAttribute('data-hardening-blocked', 'true');
+                element.dataset.hardeningBlocked = 'true';
                 blockedElements.push({
                     element: element,
                     tag: tag,
                     reason: 'Element creation blocked',
                     timestamp: Date.now()
                 });
-                window.hardeningBlockedCount = blockedElements.length;
+                gw.hardeningBlockedCount = blockedElements.length;
             }
             
             return element;
@@ -511,11 +520,11 @@
 
     
         Node.prototype.appendChild = function(child) {
-            if (child && child.nodeType === Node.ELEMENT_NODE) {
+            if (child?.nodeType === Node.ELEMENT_NODE) {
                 if (shouldBlockElement(child, config)) {
                     console.log('🛡️ appendChild blocked:', child.tagName);
                     blockElement(child, config);
-                    return child; // Return without actually appending
+                    return child;
                 }
             }
             return ORIGINAL_METHODS.appendChild.call(this, child);
@@ -523,11 +532,11 @@
 
     
         Node.prototype.insertBefore = function(newNode, referenceNode) {
-            if (newNode && newNode.nodeType === Node.ELEMENT_NODE) {
+            if (newNode?.nodeType === Node.ELEMENT_NODE) {
                 if (shouldBlockElement(newNode, config)) {
                     console.log('🛡️ insertBefore blocked:', newNode.tagName);
                     blockElement(newNode, config);
-                    return newNode; // Return without actually inserting
+                    return newNode;
                 }
             }
             return ORIGINAL_METHODS.insertBefore.call(this, newNode, referenceNode);
@@ -539,7 +548,7 @@
                 const eventAttributes = ['onclick', 'onload', 'onerror', 'onmouseover', 'onmouseout', 'onfocus', 'onblur'];
                 if (eventAttributes.includes(name.toLowerCase())) {
                     console.log('🛡️ Event attribute blocked:', name);
-                    return; // Don't set the attribute
+                    return;
                 }
             }
             
@@ -547,7 +556,7 @@
                 const dangerousAttrs = ['javascript:', 'data:', 'vbscript:'];
                 if (value && dangerousAttrs.some(dangerous => value.toLowerCase().includes(dangerous))) {
                     console.log('🛡️ Dangerous attribute blocked:', name, value);
-                    return; // Don't set the attribute
+                    return;
                 }
             }
             
@@ -590,8 +599,7 @@
             } else if (config.blockInlineScripts) {
             
                 if (config.allowTrustedDomains) {
-                    const trustedSources = TRUSTED_DOMAINS.map(domain => `https://*.${domain} https://${domain}`).join(' ');
-                    meta.content = `script-src 'self' ${trustedSources}; object-src 'none'; frame-src 'self' ${trustedSources};`;
+                    meta.content = `script-src 'self' ${getTrustedSources()}; object-src 'none'; frame-src 'self' ${getTrustedSources()};`;
                     console.log('🛡️ CSP injected: Medium protection (trusted domains)');
                 } else {
                     meta.content = "script-src 'self'; object-src 'none'; frame-src 'self';";
@@ -631,49 +639,53 @@
         }
     }
 
+    function processAddedNode(node, config) {
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+        if (shouldBlockElement(node, config)) {
+            console.log('🛡️ Mutation observer blocked:', node.tagName);
+            blockElement(node, config);
+        }
+
+        const childElements = node.querySelectorAll ? node.querySelectorAll('*') : [];
+        childElements.forEach(child => {
+            if (shouldBlockElement(child, config)) {
+                console.log('🛡️ Mutation observer blocked child:', child.tagName);
+                blockElement(child, config);
+            }
+        });
+    }
+
+    function handleMutations(mutations, config) {
+        for (const mutation of mutations) {
+            for (const node of mutation.addedNodes || []) {
+                processAddedNode(node, config);
+            }
+
+            if (mutation.type === 'attributes' && mutation.target?.nodeType === Node.ELEMENT_NODE) {
+                if (shouldBlockElement(mutation.target, config)) {
+                    console.log('🛡️ Mutation observer blocked attribute change:', mutation.target.tagName);
+                    blockElement(mutation.target, config);
+                }
+            }
+        }
+    }
+
     function setupMutationObserver(config) {
         try {
             if (observer) {
                 observer.disconnect();
             }
-            
-            observer = new MutationObserver((mutations) => {
-                mutations.forEach((mutation) => {
-                    mutation.addedNodes.forEach((node) => {
-                        if (node.nodeType === Node.ELEMENT_NODE) {
-                            if (shouldBlockElement(node, config)) {
-                                console.log('🛡️ Mutation observer blocked:', node.tagName);
-                                blockElement(node, config);
-                            }
-                            
-                        
-                            const childElements = node.querySelectorAll ? node.querySelectorAll('*') : [];
-                            childElements.forEach(child => {
-                                if (shouldBlockElement(child, config)) {
-                                    console.log('🛡️ Mutation observer blocked child:', child.tagName);
-                                    blockElement(child, config);
-                                }
-                            });
-                        }
-                    });
-                    
-                
-                    if (mutation.type === 'attributes' && mutation.target.nodeType === Node.ELEMENT_NODE) {
-                        if (shouldBlockElement(mutation.target, config)) {
-                            console.log('🛡️ Mutation observer blocked attribute change:', mutation.target.tagName);
-                            blockElement(mutation.target, config);
-                        }
-                    }
-                });
-            });
-            
+
+            observer = new MutationObserver((mutations) => handleMutations(mutations, config));
+
             observer.observe(document.documentElement || document.body || document, {
                 childList: true,
                 subtree: true,
                 attributes: true,
                 attributeFilter: ['src', 'href', 'onclick', 'onload', 'onerror']
             });
-            
+
             console.log('🛡️ Mutation observer set up successfully');
         } catch (error) {
             console.error('🛡️ Error setting up mutation observer:', error);
@@ -681,77 +693,99 @@
     }
 
     function shouldBlockElement(element, config) {
-        if (!element || !element.tagName) return false;
+        if (!element?.tagName) return false;
         
         const tag = element.tagName.toLowerCase();
-        const eventAttributes = ['onclick', 'onload', 'onerror', 'onmouseover', 'onmouseout', 'onfocus', 'onblur'];
         
-    
-        if (element.hasAttribute('data-hardening-blocked')) {
+        if (element.dataset?.hardeningBlocked) {
             return false;
         }
         
-    
         if (tag === 'script') {
-            if (config.blockJavaScript) {
-                console.log('🛡️ Script blocked (all JS blocked):', element);
-                return true;
-            }
-            
-            if (config.blockInlineScripts && !element.src) {
-                console.log('🛡️ Inline script blocked:', element);
-                return true;
-            }
-            
-            if (config.blockExternalScripts && element.src) {
-                if (config.allowTrustedDomains && isTrustedDomain(element.src, config)) {
-                    console.log('🛡️ Script allowed - trusted domain:', element.src);
-                    return false;
-                }
-                console.log('🛡️ External script blocked:', element.src);
-                return true;
-            }
+            return shouldBlockScript(element, config);
         }
         
-    
-        if ((config.blockIframes && tag === 'iframe') ||
-            (config.blockObjects && tag === 'object') ||
-            (config.blockEmbeds && tag === 'embed') ||
-            (config.blockForms && tag === 'form')) {
-            
-            if (config.allowTrustedDomains) {
-                const src = element.src || element.action || element.data;
-                if (src && isTrustedDomain(src, config)) {
-                    console.log('🛡️ Element allowed - trusted domain:', tag, src);
-                    return false;
-                }
-            }
-            console.log('🛡️ Element blocked:', tag);
+        if (shouldBlockContainer(tag, config)) {
+            return shouldBlockContainerElement(element, tag, config);
+        }
+        
+        if (shouldBlockEventHandlers(element, config)) {
+            return true;
+        }
+        
+        if (shouldBlockDangerousAttrs(element, config)) {
             return true;
         }
 
-    
-        if (config.blockEventHandlers) {
-            if (eventAttributes.some(attr => element.hasAttribute(attr))) {
-                console.log('🛡️ Event handler blocked on:', tag);
+        return false;
+    }
+
+    function shouldBlockScript(element, config) {
+        if (config.blockJavaScript) {
+            console.log('🛡️ Script blocked (all JS blocked):', element);
+            return true;
+        }
+        
+        if (config.blockInlineScripts && !element.src) {
+            console.log('🛡️ Inline script blocked:', element);
+            return true;
+        }
+        
+        if (config.blockExternalScripts && element.src) {
+            if (config.allowTrustedDomains && isTrustedDomain(element.src, config)) {
+                console.log('🛡️ Script allowed - trusted domain:', element.src);
+                return false;
+            }
+            console.log('🛡️ External script blocked:', element.src);
+            return true;
+        }
+        
+        return false;
+    }
+
+    function shouldBlockContainer(tag, config) {
+        return (config.blockIframes && tag === 'iframe') ||
+               (config.blockObjects && tag === 'object') ||
+               (config.blockEmbeds && tag === 'embed') ||
+               (config.blockForms && tag === 'form');
+    }
+
+    function shouldBlockContainerElement(element, tag, config) {
+        if (config.allowTrustedDomains) {
+            const src = element.src || element.action || element.data;
+            if (src && isTrustedDomain(src, config)) {
+                console.log('🛡️ Element allowed - trusted domain:', tag, src);
+                return false;
+            }
+        }
+        console.log('🛡️ Element blocked:', tag);
+        return true;
+    }
+
+    function shouldBlockEventHandlers(element, config) {
+        const eventAttributes = ['onclick', 'onload', 'onerror', 'onmouseover', 'onmouseout', 'onfocus', 'onblur'];
+        const tag = element.tagName.toLowerCase();
+        
+        if (config.blockEventHandlers && eventAttributes.some(attr => element.hasAttribute(attr))) {
+            console.log('🛡️ Event handler blocked on:', tag);
+            return true;
+        }
+        return false;
+    }
+
+    function shouldBlockDangerousAttrs(element, config) {
+        if (!config.blockDangerousAttributes) return false;
+        
+        const dangerousAttrs = ['javascript:', 'data:', 'vbscript:'];
+        const attributes = ['href', 'src', 'action', 'formaction'];
+        
+        for (const attr of attributes) {
+            const value = element.getAttribute(attr);
+            if (value && dangerousAttrs.some(dangerous => value.toLowerCase().includes(dangerous))) {
+                console.log('🛡️ Dangerous attribute blocked:', attr, value);
                 return true;
             }
         }
-
-    
-        if (config.blockDangerousAttributes) {
-            const dangerousAttrs = ['javascript:', 'data:', 'vbscript:'];
-            const attributes = ['href', 'src', 'action', 'formaction'];
-            
-            for (const attr of attributes) {
-                const value = element.getAttribute(attr);
-                if (value && dangerousAttrs.some(dangerous => value.toLowerCase().includes(dangerous))) {
-                    console.log('🛡️ Dangerous attribute blocked:', attr, value);
-                    return true;
-                }
-            }
-        }
-
         return false;
     }
 
@@ -764,7 +798,7 @@
             if (tag === 'script') {
                 element.removeAttribute('src');
                 element.textContent = '';
-                element.type = 'text/plain'; // Change type to prevent execution
+                element.type = 'text/plain';
                 console.log('🛡️ Script neutralized');
             }
             
@@ -782,7 +816,7 @@
             });
 
         
-            element.setAttribute('data-hardening-blocked', 'true');
+            element.dataset.hardeningBlocked = 'true';
             element.title = `Blocked by Blowfish ASE Hardening (${config.name})`;
             
             blockedElements.push({
@@ -822,7 +856,7 @@
         if (!config.allowTrustedDomains || !url) return false;
         
         try {
-            const urlObj = new URL(url, window.location.href);
+            const urlObj = new URL(url, gw.location.href);
             const hostname = urlObj.hostname.toLowerCase();
             
             return TRUSTED_DOMAINS.some(trusted => 
@@ -837,56 +871,50 @@
     function blockWebAPIs(config) {
         try {
         
-            originalAPIs.eval = window.eval;
-            originalAPIs.Function = window.Function;
-            
-        
-            window.eval = function() {
+originalAPIs.eval = gw.eval;
+            originalAPIs.Function = gw.Function;
+
+            gw.eval = function(){
                 console.log('🛡️ eval() blocked by hardening');
                 throw new Error('eval() is disabled by Blowfish ASE Hardening');
             };
-            
-            window.Function = function() {
+
+            gw.Function = function(){
                 console.log('🛡️ Function constructor blocked by hardening');
                 throw new Error('Function constructor is disabled by Blowfish ASE Hardening');
             };
             
             if (config.blockJavaScript) {
             
-                originalAPIs.setTimeout = window.setTimeout;
-                originalAPIs.setInterval = window.setInterval;
-                originalAPIs.XMLHttpRequest = window.XMLHttpRequest;
-                originalAPIs.fetch = window.fetch;
-                originalAPIs.WebSocket = window.WebSocket;
-                
-            
-                window.setTimeout = function() {
+                originalAPIs.setTimeout = gw.setTimeout;
+                originalAPIs.setInterval = gw.setInterval;
+                originalAPIs.XMLHttpRequest = gw.XMLHttpRequest;
+                originalAPIs.fetch = gw.fetch;
+                originalAPIs.WebSocket = gw.WebSocket;
+
+                gw.setTimeout = function(){
                     console.log('🛡️ setTimeout blocked by hardening');
                     return 0;
                 };
-                
-                window.setInterval = function() {
+                gw.setInterval = function(){
                     console.log('🛡️ setInterval blocked by hardening');
                     return 0;
                 };
-                
-            
-                window.XMLHttpRequest = function() {
+
+                gw.XMLHttpRequest = function(){
                     console.log('🛡️ XMLHttpRequest blocked by hardening');
                     throw new Error('XMLHttpRequest is disabled by Blowfish ASE Hardening');
                 };
-                
-            
-                if (window.fetch) {
-                    window.fetch = function() {
+
+                if(gw.fetch){
+                    gw.fetch = function(){
                         console.log('🛡️ fetch blocked by hardening');
                         return Promise.reject(new Error('fetch is disabled by Blowfish ASE Hardening'));
                     };
                 }
-                
-            
-                if (window.WebSocket) {
-                    window.WebSocket = function() {
+
+                if(gw.WebSocket){
+                    gw.WebSocket = function(){
                         console.log('🛡️ WebSocket blocked by hardening');
                         throw new Error('WebSocket is disabled by Blowfish ASE Hardening');
                     };
@@ -904,7 +932,7 @@
         
             Object.keys(originalAPIs).forEach(api => {
                 if (originalAPIs[api]) {
-                    window[api] = originalAPIs[api];
+                    gw[api] = originalAPIs[api];
                     console.log('🛡️ Restored API:', api);
                 }
             });
@@ -992,14 +1020,14 @@
     }
 
 
-    window.addEventListener('beforeunload', () => {
+    gw.addEventListener('beforeunload', () => {
         try {
             if (hardeningLevel !== 'off') {
                 sessionStorage.setItem('blowfish_hardening_level', hardeningLevel);
                 console.log('🛡️ Hardening level cached for next page');
             }
         } catch (e) {
-            console.warn('🛡️ Could not cache hardening level on unload');
+            console.warn('🛡️ Could not cache hardening level on unload', e);
         }
     });
 
