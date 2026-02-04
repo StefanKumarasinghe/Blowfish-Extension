@@ -1,10 +1,12 @@
-# 🐟 Blowfish Extension
+# 🐟 Blowfish ASE
 
-Welcome to Blowfish, a simple Chrome extension that helps keep your browsing safe. It checks websites for security issues right in your browser, giving you peace of mind without sending your data anywhere.
+**A Streamlined Web Security Analyzer**
+
+Welcome to Blowfish, a focused Chrome extension that efficiently scans websites for critical security vulnerabilities. Unlike traditional security scanners that overwhelm users with redundant checks, Blowfish is optimized to detect only high-impact threats that actually matter for your safety.
 
 ## 🔍 What It Does
 
-Blowfish automatically looks at websites you visit and points out potential security problems. Think of it as a friendly security checker that runs quietly in the background. It checks things like whether the site uses secure connections, if there are any hidden vulnerabilities, and more. Everything happens locally on your computer, so your browsing stays private.
+Blowfish automatically scans websites for critical security vulnerabilities, focusing on the most impactful issues that could compromise your safety. Unlike bloated security tools, Blowfish is streamlined to detect only high-priority threats while avoiding false positives from redundant browser-enforced checks. Everything runs locally on your computer, keeping your browsing data completely private.
 
 ## 🚀 Getting Started
 
@@ -53,11 +55,15 @@ You'll also see status messages like "Safe" (no issues), "Scanning" (still check
 
 ## 🛡️ What Gets Checked
 
-Blowfish looks at several aspects of website security:
+Blowfish performs targeted security analysis focusing on the most critical vulnerabilities:
 
-It verifies that the site uses HTTPS for secure connections. It examines security headers that websites use to protect against common attacks. The extension checks forms and cookies to make sure they're set up safely. It looks for potential cross-site scripting (XSS) vulnerabilities that could let attackers inject harmful code. Finally, it reviews third-party content like ads or scripts from other sites.
+- 🔒 **Security Headers**: Examines HTTP security headers that protect against common web attacks
+- 🛡️ **Injection Vulnerabilities**: Detects potential cross-site scripting (XSS) and SQL injection vulnerabilities in forms and URLs
+- 🔐 **Cryptographic Implementation**: Checks for weak cryptographic practices and insecure implementations
+- 🎯 **DOM Vulnerabilities**: Identifies client-side DOM manipulation vulnerabilities
+- 👤 **Browser Fingerprinting**: Detects attempts to uniquely identify users through browser characteristics
 
-All of this analysis happens right in your browser. No information about the sites you visit or the results ever leaves your computer.
+All analysis happens locally in your browser. No data about websites you visit or scan results ever leaves your computer.
 
 ## 🔒 Privacy and Security
 
@@ -96,10 +102,10 @@ The main files are:
 - `manifest.json`: Sets up how the extension works
 - `background.js`: Handles background tasks
 - `content.js`: Interacts with web pages
-- `scanner.js`: Contains the security scanning logic
+- `scanner.js`: Contains the streamlined security scanning logic (optimized to focus on high-impact vulnerabilities)
 - `popup.html` and `popup.js`: The user interface
 
-To add new checks, edit `scanner.js`. Always test your changes on different types of websites to make sure they work well.
+To add new checks, edit `scanner.js`. The scanner has been optimized to avoid redundant checks that browsers already enforce, focusing instead on critical vulnerabilities that require developer attention.
 
 ## 🤝 Contributing
 
