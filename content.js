@@ -1,11 +1,17 @@
-let scannerInjected = false;
-let scanResults = null;
-let highlightOverlays = new Map();
+if (typeof globalThis.window.scannerInjected === 'undefined') globalThis.window.scannerInjected = false; // avoid redeclaration across multiple injections
+if (globalThis.window.scannerInjected) {
+    console.log('Advanced Web Security Scanner Pro content script already injected, skipping re-injection.');
+} else {
+    globalThis.window.scannerInjected = true; 
 
-// Robust messaging: handle cases where extension context becomes invalidated (e.g., extension reload)
-let extensionContextValid = !!(typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id);
-const pendingMessages = [];
-let flushInterval = null;
+    (function() {
+        var scanResults = null;
+        var highlightOverlays = new Map();
+        var extensionContextValid = !!(typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id);
+        var pendingMessages = [];
+        var MAX_MESSAGE_RETRIES = 5;
+        var flushInterval = null;
+        var DEBUG = false;
 
 function isExtensionAvailable() {
     return !!(typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id);
@@ -14,30 +20,29 @@ function isExtensionAvailable() {
 function safeSendMessage(message) {
     try {
         if (isExtensionAvailable()) {
-            // Attempt to send and handle runtime.lastError in a callback
             chrome.runtime.sendMessage(message, (response) => {
                 if (chrome.runtime.lastError) {
-                    console.warn('sendMessage failed:', chrome.runtime.lastError.message);
+                    const errMsg = chrome.runtime.lastError && chrome.runtime.lastError.message;
+                    if (DEBUG) console.warn('sendMessage failed:', errMsg);
                     extensionContextValid = false;
-                    // Queue the message for retry
-                    pendingMessages.push(message);
+                    pendingMessages.push({ message, retries: 0, lastFailedAt: Date.now(), lastErrorMsg: errMsg });
                     startFlushTimer();
                 }
             });
             extensionContextValid = true;
             return true;
         } else {
-            // Extension not available - queue message and start retry loop
             extensionContextValid = false;
-            pendingMessages.push(message);
+            pendingMessages.push({ message, retries: 0, lastFailedAt: Date.now() });
             startFlushTimer();
-            console.warn('Extension context invalidated. Queuing message.');
+            if (DEBUG) console.warn('Extension context invalidated. Queuing message.');
             return false;
         }
     } catch (err) {
-        console.warn('Failed to send message (exception):', err && err.message ? err.message : err);
+        const em = err && err.message ? err.message : err;
+        if (DEBUG) console.warn('Failed to send message (exception):', em);
         extensionContextValid = false;
-        pendingMessages.push(message);
+        pendingMessages.push({ message, retries: 0, lastFailedAt: Date.now(), lastErrorMsg: em });
         startFlushTimer();
         return false;
     }
@@ -46,37 +51,67 @@ function safeSendMessage(message) {
 function startFlushTimer() {
     if (flushInterval) return;
     flushInterval = setInterval(() => {
-        if (isExtensionAvailable() && pendingMessages.length > 0) {
-            const messagesToSend = pendingMessages.splice(0, pendingMessages.length);
-            messagesToSend.forEach(msg => {
-                try {
-                    chrome.runtime.sendMessage(msg, (response) => {
-                        if (chrome.runtime.lastError) {
-                            console.warn('Retry sendMessage failed:', chrome.runtime.lastError.message);
-                            // push back to pending
-                            pendingMessages.push(msg);
-                        }
-                    });
-                } catch (err) {
-                    pendingMessages.push(msg);
-                }
-            });
-            if (pendingMessages.length === 0) {
-                clearInterval(flushInterval);
-                flushInterval = null;
-                extensionContextValid = true;
+        if (!isExtensionAvailable() || pendingMessages.length === 0) return;
+
+        // Attempt to send messages that are due for retry
+        const now = Date.now();
+        const messagesToAttempt = pendingMessages.splice(0, pendingMessages.length);
+
+        messagesToAttempt.forEach(entry => {
+            // Exponential backoff window: only attempt if enough time passed since last failure
+            const backoffMs = Math.min(60000, 1000 * Math.pow(2, entry.retries || 0));
+            if (entry.lastFailedAt && (now - entry.lastFailedAt) < backoffMs) {
+                // Not ready yet, put it back
+                pendingMessages.push(entry);
+                return;
             }
+
+            try {
+                chrome.runtime.sendMessage(entry.message, (response) => {
+                    if (chrome.runtime.lastError) {
+                        const errMsg = chrome.runtime.lastError && chrome.runtime.lastError.message;
+                        entry.retries = (entry.retries || 0) + 1;
+                        entry.lastFailedAt = Date.now();
+                        entry.lastErrorMsg = errMsg;
+
+                        if (entry.retries < MAX_MESSAGE_RETRIES) {
+                            // Requeue for another attempt
+                            pendingMessages.push(entry);
+                        } else {
+                            if (DEBUG) console.warn('Dropping message after max retries:', entry.message, 'lastError:', errMsg);
+                        }
+
+                        // Mark context invalid so we don't hammer further
+                        extensionContextValid = false;
+                    }
+                });
+            } catch (err) {
+                entry.retries = (entry.retries || 0) + 1;
+                entry.lastFailedAt = Date.now();
+                entry.lastErrorMsg = err && err.message ? err.message : err;
+                if (entry.retries < MAX_MESSAGE_RETRIES) pendingMessages.push(entry);
+            }
+        });
+
+        if (pendingMessages.length === 0) {
+            clearInterval(flushInterval);
+            flushInterval = null;
+            extensionContextValid = true;
         }
     }, 3000);
 }
 
 // Listen for visibility/focus to attempt immediate flush
-window.addEventListener('focus', () => {
+globalThis.window.addEventListener('focus', () => {
     if (isExtensionAvailable() && pendingMessages.length > 0) startFlushTimer();
+    // If extension becomes available, clear last-failure marks so messages can be retried sooner
+    if (isExtensionAvailable()) {
+        pendingMessages.forEach(entry => { if (entry && entry.lastFailedAt) entry.lastFailedAt = 0; });
+    }
 });
 
 // Stop flush on unload
-window.addEventListener('beforeunload', () => {
+globalThis.window.addEventListener('beforeunload', () => {
     if (flushInterval) {
         clearInterval(flushInterval);
         flushInterval = null;
@@ -84,8 +119,13 @@ window.addEventListener('beforeunload', () => {
 });
 
 // Test/debug accessor: returns number of queued messages (safe to remove in prod)
-window.__getQueuedMessageCount = function() {
+globalThis.window.__getQueuedMessageCount = function() {
     return pendingMessages.length;
+};
+
+// For debugging: inspect queued messages (returns shallow copy)
+globalThis.window.__peekQueuedMessages = function() {
+    return pendingMessages.slice(0, 20).map(e => ({ retries: e.retries, lastErrorMsg: e.lastErrorMsg }));
 };
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -162,7 +202,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ success: false, error: error.message });
     }
     
-    return true; // Keep message channel open for async responses
+    return false; // No async response is expected
 });
 
 // Listen for scanner events from the injected script with improved error handling
@@ -199,8 +239,8 @@ function canScanPage() {
 }
 
 // Clean up when page unloads
-window.addEventListener('beforeunload', () => {
-    scannerInjected = false;
+globalThis.window.addEventListener('beforeunload', () => {
+    globalThis.window.scannerInjected = false;
     scanResults = null;
     clearAllHighlights();
 });
@@ -240,8 +280,8 @@ function highlightElement(issue, issueIndex) {
                 
              
                 const rect = element.getBoundingClientRect();
-                highlight.style.left = (rect.left + window.scrollX) + 'px';
-                highlight.style.top = (rect.top + window.scrollY) + 'px';
+                highlight.style.left = (rect.left + globalThis.window.scrollX) + 'px';
+                highlight.style.top = (rect.top + globalThis.window.scrollY) + 'px';
                 highlight.style.width = rect.width + 'px';
                 highlight.style.height = rect.height + 'px';
                 
@@ -254,114 +294,6 @@ function highlightElement(issue, issueIndex) {
 function removeHighlight(issueIndex) {
     const highlights = document.querySelectorAll(`[id^="security-highlight-${issueIndex}-"]`);
     highlights.forEach(highlight => highlight.remove());
-}
-
-// Highlighting functions
-function addHighlight(issueIndex, issue) {
-    if (!issue.details?.evidence) return;
-    
-    const elements = [];
-    
- 
-    issue.details.evidence.forEach(evidence => {
-        if (evidence.selector) {
-                try {
-                    const found = document.querySelectorAll(evidence.selector);
-                    elements.push(...found);
-                } catch (e) {
-                    console.warn('Invalid selector:', evidence.selector, e);
-                }
-            } else if (evidence.element) {
-            elements.push(evidence.element);
-        } else if (evidence.code) {
-         
-            const allElements = document.querySelectorAll('*');
-            for (const el of allElements) {
-                if (el.outerHTML.includes(evidence.code.substring(0, 50))) {
-                    elements.push(el);
-                    break;
-                }
-            }
-        }
-    });
-    
- 
-    const overlays = [];
-    elements.forEach((element, index) => {
-        if (element?.getBoundingClientRect) {
-            const overlay = createHighlightOverlay(element, issue.severity, `${issue.message} (${index + 1})`);
-            if (overlay) {
-                overlays.push(overlay);
-                document.body.appendChild(overlay);
-            }
-        }
-    });
-    
-    if (overlays.length > 0) {
-        highlightOverlays.set(issueIndex, overlays);
-    }
-}
-
-function createHighlightOverlay(element, severity, tooltip) {
-    try {
-        const rect = element.getBoundingClientRect();
-        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-        const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
-        
-        const overlay = document.createElement('div');
-        overlay.style.cssText = `
-            position: absolute;
-            top: ${rect.top + scrollTop}px;
-            left: ${rect.left + scrollLeft}px;
-            width: ${rect.width}px;
-            height: ${rect.height}px;
-            border: 3px solid ${getSeverityColor(severity)};
-            background: ${getSeverityColor(severity)}20;
-            pointer-events: none;
-            z-index: 999999;
-            border-radius: 4px;
-            box-shadow: 0 0 10px ${getSeverityColor(severity)}40;
-            animation: highlightPulse 2s infinite;
-        `;
-        
-     
-        const tooltipEl = document.createElement('div');
-        tooltipEl.textContent = tooltip;
-        tooltipEl.style.cssText = `
-            position: absolute;
-            top: -30px;
-            left: 0;
-            background: ${getSeverityColor(severity)};
-            color: white;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-family: 'Ubuntu Mono', monospace;
-            white-space: nowrap;
-            z-index: 1000000;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-        `;
-        
-        overlay.appendChild(tooltipEl);
-        
-     
-        if (!document.getElementById('highlight-styles')) {
-            const style = document.createElement('style');
-            style.id = 'highlight-styles';
-            style.textContent = `
-                @keyframes highlightPulse {
-                    0%, 100% { opacity: 0.8; }
-                    50% { opacity: 0.4; }
-                }
-            `;
-            document.head.appendChild(style);
-        }
-        
-        return overlay;
-    } catch (error) {
-        console.error('Failed to create highlight overlay:', error);
-        return null;
-    }
 }
 
 function getSeverityColor(severity) {
@@ -382,9 +314,9 @@ function clearAllHighlights() {
     highlightOverlays.clear();
 }
 
-console.log('Advanced Web Security Scanner Pro content script loaded');
+if (DEBUG) console.log('Advanced Web Security Scanner Pro content script loaded');
 
-let lastUrl = globalThis.location.href;
+var lastUrl = globalThis.location.href;
 new MutationObserver(() => {
     const url = globalThis.location.href;
     if (url !== lastUrl) {
@@ -393,3 +325,5 @@ new MutationObserver(() => {
         document.querySelectorAll('[id^="security-highlight-"]').forEach(h => h.remove());
     }
 }).observe(document, { subtree: true, childList: true }); 
+    })();
+} 
