@@ -1,6 +1,5 @@
 (function() {
     'use strict';
-
     const issues = new Map();
     let scanComplete = false;
     let reputationData = {};
@@ -447,10 +446,18 @@
             `;
             
             const summary = reputationData.summary || {};
-            const ratingColor = summary.overall_rating === 'excellent' ? '#10b981' :
-                               summary.overall_rating === 'good' ? colors.success : 
-                               summary.overall_rating === 'moderate' ? colors.warning : 
-                               summary.overall_rating === 'suspicious' ? '#f59e0b' : colors.danger;
+            let ratingColor;
+            if (summary.overall_rating === 'excellent') {
+                ratingColor = '#10b981';
+            } else if (summary.overall_rating === 'good') {
+                ratingColor = colors.success;
+            } else if (summary.overall_rating === 'moderate') {
+                ratingColor = colors.warning;
+            } else if (summary.overall_rating === 'suspicious') {
+                ratingColor = '#f59e0b';
+            } else {
+                ratingColor = colors.danger;
+            }
             
             let repHTML = `
                 <div style="font-weight: 700; margin-bottom: 16px; color: ${colors.success}; display: flex; align-items: center; gap: 8px;">
@@ -473,9 +480,16 @@
             `;
             
         
-            if (summary.domain_info && summary.domain_info.calculated_age_years !== undefined) {
-                const ageColor = summary.domain_info.calculated_age_years >= 5 ? colors.success :
-                               summary.domain_info.calculated_age_years >= 2 ? colors.warning : colors.danger;
+            if (summary.domain_info?.calculated_age_years !== undefined && summary.domain_info.calculated_age_years !== null) {
+                const age = summary.domain_info.calculated_age_years;
+                let ageColor;
+                if (age >= 5) {
+                    ageColor = colors.success;
+                } else if (age >= 2) {
+                    ageColor = colors.warning;
+                } else {
+                    ageColor = colors.danger;
+                }
                 repHTML += `
                     <div style="background: white; padding: 10px; border-radius: 8px; text-align: center;">
                         <div style="font-size: 11px; color: ${colors.textSecondary}; margin-bottom: 4px;">DOMAIN AGE</div>
@@ -617,12 +631,21 @@
                                           result.status === 'analyzed' ? colors.success : colors.textSecondary;
                         
                         const riskLevel = result.data?.risk_assessment || result.data?.risk_level || 'none';
-                        const riskBadge = riskLevel !== 'none' ? 
-                            `<span style="background: ${riskLevel === 'high' || riskLevel === 'critical' ? colors.danger : 
-                                                     riskLevel === 'medium' ? colors.warning : colors.success}; 
+                        let riskBadge = '';
+                        if (riskLevel && riskLevel !== 'none') {
+                            let riskColor;
+                            if (riskLevel === 'high' || riskLevel === 'critical') {
+                                riskColor = colors.danger;
+                            } else if (riskLevel === 'medium') {
+                                riskColor = colors.warning;
+                            } else {
+                                riskColor = colors.success;
+                            }
+                            riskBadge = `<span style="background: ${riskColor}; 
                                           color: white; padding: 2px 6px; border-radius: 10px; font-size: 9px; margin-left: 8px;">
                                 ${riskLevel.toUpperCase()}
-                            </span>` : '';
+                            </span>`;
+                        }
                         
                         repHTML += `
                             <div style="margin-bottom: 6px; padding: 8px; background: white; border-radius: 6px; font-size: 11px;">
@@ -810,12 +833,7 @@
     });
 
 
-    async function sha256(str) {
-        const buffer = new TextEncoder().encode(str);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    }
+    // THESE ARE THE DOMAIN REPUTATION CHECKS
 
     async function checkDomainReputation() {
         try {
@@ -830,7 +848,6 @@
             const reputationChecks = await Promise.allSettled([
                 checkWhoisData(hostname),
                 checkDomainAge(hostname),
-                checkMalwareDomains(hostname),
                 checkShodanData(hostname),
                 checkDomainHistory(hostname)
             ]);
@@ -879,6 +896,7 @@
                         }
                     }
                 } catch (e) {
+                    console.warn(`DNS query for ${query.type} failed:`, e);
                 }
             }
             
@@ -923,17 +941,17 @@
                 const waybackResponse = await fetch(`https://archive.org/wayback/available?url=${hostname}`);
                 if (waybackResponse.ok) {
                     const waybackData = await waybackResponse.json();
-                    if (waybackData.archived_snapshots && waybackData.archived_snapshots.closest) {
+                    if (waybackData.archived_snapshots?.closest) {
                         const snapshot = waybackData.archived_snapshots.closest;
                         historyData.first_seen_wayback = snapshot.timestamp;
                         historyData.wayback_url = snapshot.url;
                         
                         const firstSeen = new Date(
                             snapshot.timestamp.substring(0, 4),
-                            parseInt(snapshot.timestamp.substring(4, 6)) - 1,
+                            Number.parseInt(snapshot.timestamp.substring(4, 6)) - 1,
                             snapshot.timestamp.substring(6, 8)
                         );
-                        const daysSinceFirstSeen = Math.floor((new Date() - firstSeen) / (1000 * 60 * 60 * 24));
+                        const daysSinceFirstSeen = Math.floor((Date.now() - firstSeen) / (1000 * 60 * 60 * 24));
                         historyData.days_since_first_seen = daysSinceFirstSeen;
                         historyData.years_since_first_seen = Math.floor(daysSinceFirstSeen / 365);
                     }
@@ -1029,7 +1047,7 @@
             
         
             const dnsResponse = await fetch(`https://dns.google/resolve?name=${hostname}&type=A`).catch(() => null);
-            if (dnsResponse && dnsResponse.ok) {
+            if (dnsResponse?.ok) {
                 const dnsData = await dnsResponse.json();
                 
                 const cleanDnsData = {};
@@ -1265,32 +1283,7 @@
         
         return { service: 'Enhanced Domain Analysis', status: 'unavailable' };
     }
-    
-    async function checkMalwareDomains(hostname) {
-        try {
-    
-            const malwarePatterns = [
-                /bit\.ly|tinyurl\.com|short\.link/i, // URL shorteners
-                /[0-9]{1,3}-[0-9]{1,3}-[0-9]{1,3}-[0-9]{1,3}/, // IP-like domains
-                /xn--/, // Punycode (internationalized domains)
-                /(facebook|google|microsoft|apple|amazon|paypal)-?(login|secure|account|verify)/i, // Phishing patterns
-            ];
-            
-            const matchedPatterns = malwarePatterns.filter(pattern => pattern.test(hostname));
-            
-            return {
-                service: 'Malware Pattern Check',
-                status: 'analyzed',
-                data: {
-                    suspicious_patterns: matchedPatterns.length,
-                    risk_level: matchedPatterns.length > 0 ? 'high' : 'low',
-                    patterns: matchedPatterns.map(p => p.toString())
-                }
-            };
-        } catch (e) {}
-        
-        return { service: 'Malware Pattern Check', status: 'unavailable' };
-    }
+
     
     
     function generateReputationSummary(results) {
@@ -1343,14 +1336,14 @@
                 if (result.service === 'Domain History') {
                     if (result.data.first_seen_wayback) {
                         firstSeen = result.data.first_seen_wayback;
-                        // Convert YYYYMMDDHHMMSS format to human readable date
+                        
                         try {
                             const firstSeenTimestamp = result.data.first_seen_wayback.toString();
                             if (firstSeenTimestamp.length >= 8) {
                                 const firstSeenDate = new Date(
-                                    firstSeenTimestamp.substring(0, 4),  // year
-                                    parseInt(firstSeenTimestamp.substring(4, 6)) - 1,  // month (0-indexed)
-                                    firstSeenTimestamp.substring(6, 8)   // day
+                                    firstSeenTimestamp.substring(0, 4),  
+                                    parseInt(firstSeenTimestamp.substring(4, 6)) - 1,  
+                                    firstSeenTimestamp.substring(6, 8)   
                                 );
                                 summary.domain_info.first_seen = firstSeenDate.toLocaleDateString();
                             } else {
@@ -1481,23 +1474,22 @@
         setTimeout(runComprehensiveScan, 500);
     }, 1500);
 
+    // END OF DOMAIN REPUTATION CHECKS
 
-    
+    // START OF OTHER CHECKS
+
     async function runComprehensiveScan() {
         try {
             logMessage('Starting comprehensive security scan', 'info');
-            
-            // Initialize scan state
-            scanComplete = false;
             let scanStartTime = Date.now();
             let lastProgressUpdate = Date.now();
             
-            // Set up progress monitoring
+            
             const progressMonitor = setInterval(() => {
                 const now = Date.now();
-                if (now - lastProgressUpdate > 10000) { // 10 seconds without progress
+                if (now - lastProgressUpdate > 10000) { 
                     logMessage('Scan progress check - ensuring scan is responsive', 'info');
-                    window.dispatchEvent(new CustomEvent('securityScanProgress', {
+                    globalThis.window.dispatchEvent(new CustomEvent('securityScanProgress', {
                         detail: {
                             currentCheck: 'Scan in progress - performing deep analysis...',
                             vulnerabilityCount: vulnerabilityCount,
@@ -1515,7 +1507,7 @@
             
             applySettings();
             
-            window.dispatchEvent(new CustomEvent('securityScanProgress', {
+            globalThis.window.dispatchEvent(new CustomEvent('securityScanProgress', {
                 detail: {
                     currentCheck: 'Starting comprehensive security scan - this may take a while...',
                     vulnerabilityCount: 0,
@@ -1523,9 +1515,9 @@
                 }
             }));
             
-            // Phase 1: Quick checks
+            
             logMessage('Phase 1: Quick security checks...', 'info');
-            window.dispatchEvent(new CustomEvent('securityScanProgress', {
+            globalThis.window.dispatchEvent(new CustomEvent('securityScanProgress', {
                 detail: {
                     currentCheck: 'Phase 1: Scanning document for exposed API keys and secrets...',
                     vulnerabilityCount: vulnerabilityCount,
@@ -1533,16 +1525,9 @@
                 }
             }));
             
-            try {
-                checkAPIKeys();
-                lastProgressUpdate = Date.now();
-            } catch (apiError) {
-                logMessage(`API key check failed: ${apiError.message}`, 'error');
-            }
             
-            // Phase 2: Domain reputation
             logMessage('Phase 2: Domain reputation analysis...', 'info');
-            window.dispatchEvent(new CustomEvent('securityScanProgress', {
+            globalThis.window.dispatchEvent(new CustomEvent('securityScanProgress', {
                 detail: {
                     currentCheck: 'Phase 2: Analyzing domain reputation and threat intelligence...',
                     vulnerabilityCount: vulnerabilityCount,
@@ -1557,9 +1542,9 @@
                 logMessage(`Domain reputation check failed: ${reputationError.message}`, 'error');
             }
             
-            // Phase 3: Core security checks
+            
             logMessage('Phase 3: Core security analysis...', 'info');
-            window.dispatchEvent(new CustomEvent('securityScanProgress', {
+            globalThis.window.dispatchEvent(new CustomEvent('securityScanProgress', {
                 detail: {
                     currentCheck: 'Phase 3: Performing core security analysis...',
                     vulnerabilityCount: vulnerabilityCount,
@@ -1567,33 +1552,32 @@
                 }
             }));
             
-            // Group checks into batches for better progress reporting
+            
             const coreChecks = [
-                { name: 'Protocol Security', func: checkProtocolSecurity },
-                { name: 'Security Headers', func: checkSecurityHeaders },
-                { name: 'SSL Certificate', func: checkSSLCertificate },
-                { name: 'Mixed Content', func: checkMixedContent }
+                checkProtocolSecurity,
+                checkSecurityHeaders,
+                checkMixedContent
             ];
             
-            for (const check of coreChecks) {
+            for (let i = 0; i < coreChecks.length; i++) {
                 try {
-                    window.dispatchEvent(new CustomEvent('securityScanProgress', {
+                    globalThis.window.dispatchEvent(new CustomEvent('securityScanProgress', {
                         detail: {
-                            currentCheck: `Checking ${check.name}...`,
+                            currentCheck: `Checking core security ${i + 1}/${coreChecks.length}...`,
                             vulnerabilityCount: vulnerabilityCount,
                             timestamp: Date.now()
                         }
                     }));
-                    await check.func();
+                    await coreChecks[i]();
                     lastProgressUpdate = Date.now();
                 } catch (error) {
-                    logMessage(`${check.name} check failed: ${error.message}`, 'error');
+                    logMessage(`Core check ${i + 1} failed: ${error.message}`, 'error');
                 }
             }
             
-            // Phase 4: Advanced security checks
+            
             logMessage('Phase 4: Advanced security analysis...', 'info');
-            window.dispatchEvent(new CustomEvent('securityScanProgress', {
+            globalThis.window.dispatchEvent(new CustomEvent('securityScanProgress', {
                 detail: {
                     currentCheck: 'Phase 4: Performing advanced security analysis...',
                     vulnerabilityCount: vulnerabilityCount,
@@ -1615,7 +1599,7 @@
                 checkPasswordSecurity
             ];
             
-            // Run advanced checks with error isolation
+            
             const advancedResults = await Promise.allSettled(advancedChecks.map(check => {
                 return new Promise(async (resolve, reject) => {
                     try {
@@ -1623,16 +1607,16 @@
                         resolve();
                     } catch (error) {
                         logMessage(`Advanced check failed: ${error.message}`, 'error');
-                        resolve(); // Don't reject, continue with other checks
+                        resolve(); 
                     }
                 });
             }));
             
             lastProgressUpdate = Date.now();
             
-            // Phase 5: Client-side security checks
+            
             logMessage('Phase 5: Client-side security analysis...', 'info');
-            window.dispatchEvent(new CustomEvent('securityScanProgress', {
+            globalThis.window.dispatchEvent(new CustomEvent('securityScanProgress', {
                 detail: {
                     currentCheck: 'Phase 5: Analyzing client-side security...',
                     vulnerabilityCount: vulnerabilityCount,
@@ -1654,10 +1638,10 @@
                 checkDeprecatedFeatures
             ];
             
-            // Run client-side checks with progress updates
+        
             for (let i = 0; i < clientSideChecks.length; i++) {
                 try {
-                    window.dispatchEvent(new CustomEvent('securityScanProgress', {
+                    globalThis.window.dispatchEvent(new CustomEvent('securityScanProgress', {
                         detail: {
                             currentCheck: `Client-side analysis ${i + 1}/${clientSideChecks.length}...`,
                             vulnerabilityCount: vulnerabilityCount,
@@ -1671,7 +1655,7 @@
                 }
             }
             
-            // Clear progress monitor
+            
             clearInterval(progressMonitor);
             
             window.dispatchEvent(new CustomEvent('securityScanProgress', {
@@ -1740,1461 +1724,10 @@
             handleScanError(error);
         }
     }
-
-    async function checkCertificateHostname() {
-        const evidence = [];
-        const hostname = location.hostname;
-        
-
-        const hostnameIssues = [];
-        
-
-        if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
-            hostnameIssues.push('Using IP address instead of domain name');
-        }
-        
-
-        if (hostname.includes('_')) {
-            hostnameIssues.push('Hostname contains invalid underscore characters');
-        }
-        
-
-        if (hostname.length > 253) {
-            hostnameIssues.push('Hostname exceeds maximum length');
-        }
-        
-
-        if (/^(www\d+|mail\d+|server\d+)/.test(hostname)) {
-            hostnameIssues.push('Hostname uses suspicious numbered pattern');
-        }
-        
-        if (hostnameIssues.length > 0) {
-            hostnameIssues.forEach(issue => {
-                evidence.push({
-                    type: 'Hostname Issue',
-                    description: issue,
-                    location: hostname
-                });
-            });
-            
-            addIssue('hostname-issues', 'Certificate hostname issues detected', 'medium', {
-                title: 'Certificate Hostname Issues',
-                description: 'Certificate hostname has potential security concerns.',
-                impact: 'Medium - May cause certificate validation issues',
-                solution: 'Use proper domain name with valid characters',
-                evidence: evidence
-            });
-        }
-    }
     
-    async function checkCertificateExpiration() {
-        const evidence = [];
-        
-        try {
-    
-            const response = await fetch(location.origin, { method: 'HEAD' });
-            
-    
-            const expirationHeaders = [
-                'expires',
-                'x-certificate-expiry',
-                'certificate-expiry'
-            ];
-            
-            expirationHeaders.forEach(header => {
-                const value = response.headers.get(header);
-                if (value) {
-                    evidence.push({
-                        type: 'Expiration Info',
-                        description: `${header}: ${value}`,
-                        location: 'HTTP Headers'
-                    });
-                }
-            });
-            
-    
-    
-            const now = new Date();
-            const warningPeriod = 30 * 24 * 60 * 60 * 1000; // 30 days
-            
-            evidence.push({
-                type: 'Expiration Check',
-                description: 'Certificate expiration monitoring recommended',
-                location: 'Certificate management'
-            });
-            
-        } catch (error) {
-            console.log('Certificate expiration check failed:', error);
-        }
-    }
-    
-    async function checkCertificateAuthority() {
-        const evidence = [];
-        
-        try {
-    
-            const response = await fetch(location.origin, { method: 'HEAD' });
-            
-    
-            const evIndicators = [
-                'x-ev-certificate',
-                'extended-validation',
-                'organization-validated'
-            ];
-            
-            let certificateType = 'Domain Validated (DV)';
-            
-            evIndicators.forEach(indicator => {
-                const value = response.headers.get(indicator);
-                if (value) {
-                    certificateType = 'Extended Validation (EV)';
-                    evidence.push({
-                        type: 'Certificate Type',
-                        description: `EV certificate detected: ${indicator}`,
-                        location: 'Certificate'
-                    });
-                }
-            });
-            
-            evidence.push({
-                type: 'Certificate Authority',
-                description: `Certificate type: ${certificateType}`,
-                        location: 'Certificate validation'
-            });
-            
-    
-            const serverHeader = response.headers.get('server');
-            if (serverHeader && serverHeader.toLowerCase().includes('letsencrypt')) {
-                evidence.push({
-                    type: 'Certificate Authority',
-                    description: 'Let\'s Encrypt certificate detected',
-                    location: 'Server headers'
-                });
-            }
-            
-        } catch (error) {
-            console.log('Certificate authority check failed:', error);
-        }
-    }
-    
-    async function testSSLVulnerabilities() {
-        const evidence = [];
-        
-
-        const vulnerabilityTests = [
-            {
-                name: 'POODLE',
-                description: 'Tests for SSLv3 POODLE vulnerability',
-                test: () => testPOODLE()
-            },
-            {
-                name: 'BEAST',
-                description: 'Tests for TLS 1.0 BEAST vulnerability',
-                test: () => testBEAST()
-            },
-            {
-                name: 'Heartbleed',
-                description: 'Tests for OpenSSL Heartbleed vulnerability',
-                test: () => testHeartbleed()
-            },
-            {
-                name: 'FREAK',
-                description: 'Tests for FREAK vulnerability',
-                test: () => testFREAK()
-            },
-            {
-                name: 'Logjam',
-                description: 'Tests for Logjam vulnerability',
-                test: () => testLogjam()
-            }
-        ];
-        
-        for (const vulnTest of vulnerabilityTests) {
-            try {
-                const result = await vulnTest.test();
-                if (result.vulnerable) {
-                    evidence.push({
-                        type: 'SSL Vulnerability',
-                        description: `${vulnTest.name}: ${result.description}`,
-                        location: 'SSL/TLS configuration'
-                    });
-                    
-                    addIssue(`ssl-vuln-${vulnTest.name.toLowerCase()}`, 
-                             `SSL vulnerability: ${vulnTest.name}`, 
-                             'high', {
-                        title: `SSL/TLS Vulnerability: ${vulnTest.name}`,
-                        description: `${vulnTest.description} - ${result.description}`,
-                        impact: 'High - SSL/TLS connection can be compromised',
-                        solution: result.solution,
-                        evidence: evidence,
-                        references: [{
-                            title: `${vulnTest.name} Vulnerability Info`,
-                            url: result.referenceUrl || 'https://www.owasp.org/index.php/Transport_Layer_Protection_Cheat_Sheet'
-                    }]
-                    });
-                }
-            } catch (e) {
-        
-            }
-        }
-    }
-    
-
-    async function checkSSLCertificate() {
-        const evidence = [];
-        
-        if (location.protocol === 'https:') {
-            try {
-        
-                const certificateChecks = await Promise.allSettled([
-                    checkCertificateValidity(),
-                    checkCertificateChain(),
-                    checkCertificateRevocation(),
-                    checkCertificateTransparency(),
-                    checkWeakCryptography(),
-                    checkCertificateHostname(),
-                    checkCertificateExpiration(),
-                    checkCertificateAuthority(),
-                    checkMixedContent(),
-                    checkHSTSPreload(),
-                    checkTLSConfiguration(),
-                    checkCertificateTransparencyLogs(),
-                    checkModernTLSFeatures()
-                ]);
-                
-        
-                certificateChecks.forEach((result, index) => {
-                    if (result.status === 'rejected') {
-                        console.warn(`Certificate check ${index} failed:`, result.reason);
-                    }
-                });
-                
-        
-                await testSSLVulnerabilities();
-                
-        
-                const sslInfo = await getCertificateInfo();
-                if (sslInfo) {
-                    evidence.push({
-                        type: 'SSL Summary',
-                        description: `Protocol: ${sslInfo.protocol}, Cipher: ${sslInfo.cipher}`,
-                        location: 'TLS Handshake'
-                    });
-                }
-                
-            } catch (e) {
-                addIssue('ssl-check-failed', 'SSL certificate validation failed', 'medium', {
-                    title: 'SSL Certificate Check Failed',
-                    description: 'Unable to fully validate SSL certificate security.',
-                    impact: 'Medium - Certificate security status unknown',
-                    solution: 'Manually verify certificate using browser dev tools',
-                    evidence: [{
-                        type: 'Error',
-                        description: e.message,
-                        location: 'Certificate validation'
-                    }]
-                });
-            }
-        } else {
-    
-            addIssue('no-ssl', 'Site not using HTTPS encryption', 'critical', {
-                title: 'No SSL/TLS Encryption',
-                description: 'Site is served over unencrypted HTTP connection.',
-                impact: 'Critical - All data transmitted in plain text',
-                solution: 'Implement HTTPS with proper SSL/TLS certificate',
-                evidence: [{
-                    type: 'Protocol Check',
-                    description: `Site using ${location.protocol}`,
-                    location: location.href
-                }],
-                references: [
-                    {
-                        title: 'Why HTTPS Matters - Google',
-                        url: 'https://developers.google.com/web/fundamentals/security/encrypt-in-transit/why-https'
-                    }
-                ]
-            });
-        }
-    }
-
-    async function checkWeakCryptography() {
-        const evidence = [];
-        
-        try {
-    
-            const response = await fetch(location.origin, { method: 'HEAD' });
-            
-    
-            if (navigator.connection && navigator.connection.effectiveType) {
-                evidence.push({
-                    type: 'Connection Info',
-                    description: `Effective connection type: ${navigator.connection.effectiveType}`,
-                    location: 'Browser API'
-                });
-            }
-            
-    
-            const serverHeader = response.headers.get('server');
-            const weakCryptoIndicators = [];
-            
-            if (serverHeader) {
-                const serverLower = serverHeader.toLowerCase();
-                
-        
-                if (serverLower.includes('sslv2') || serverLower.includes('ssl 2')) {
-                    weakCryptoIndicators.push('SSLv2 protocol detected');
-                }
-                if (serverLower.includes('sslv3') || serverLower.includes('ssl 3')) {
-                    weakCryptoIndicators.push('SSLv3 protocol detected');
-                }
-                if (serverLower.includes('tls/1.0') || serverLower.includes('tls 1.0')) {
-                    weakCryptoIndicators.push('TLS 1.0 protocol detected');
-                }
-                if (serverLower.includes('rc4')) {
-                    weakCryptoIndicators.push('RC4 cipher detected');
-                }
-                if (serverLower.includes('des') && !serverLower.includes('3des')) {
-                    weakCryptoIndicators.push('DES cipher detected');
-                }
-            }
-            
-    
-            const securityHeaders = {
-                hsts: response.headers.get('strict-transport-security'),
-                hpkp: response.headers.get('public-key-pins'),
-                expectCT: response.headers.get('expect-ct'),
-                csp: response.headers.get('content-security-policy')
-            };
-            
-    
-            const securityFeatures = Object.values(securityHeaders).filter(Boolean).length;
-            
-    
-            if (weakCryptoIndicators.length > 0) {
-                weakCryptoIndicators.forEach(indicator => {
-                    evidence.push({
-                        type: 'Weak Cryptography',
-                        description: indicator,
-                        location: 'Server configuration'
-                    });
-                });
-                
-                addIssue('weak-crypto-detected', 'Weak cryptographic algorithms detected', 'high', {
-                    title: 'Weak Cryptographic Algorithms',
-                    description: 'Server is using outdated or weak cryptographic protocols/ciphers.',
-                    impact: 'High - Vulnerable to cryptographic attacks',
-                    solution: 'Upgrade to modern TLS versions (1.2+) and disable weak cipher suites',
-                    evidence: evidence,
-                    references: [{
-                        title: 'TLS Security Best Practices',
-                        url: 'https://wiki.mozilla.org/Security/Server_Side_TLS'
-                    }]
-                });
-                return;
-            }
-            
-    
-            if (securityHeaders.hsts) {
-                const hstsValue = securityHeaders.hsts.toLowerCase();
-                const hstsIssues = [];
-                
-                if (!hstsValue.includes('includesubdomains')) {
-                    hstsIssues.push('HSTS missing includeSubDomains directive');
-                }
-                
-        
-                const maxAgeMatch = hstsValue.match(/max-age=(\d+)/);
-                if (maxAgeMatch) {
-                    const maxAge = parseInt(maxAgeMatch[1]);
-                    if (maxAge < 31536000) { // Less than 1 year
-                        hstsIssues.push(`HSTS max-age too short: ${maxAge} seconds`);
-                    }
-                }
-                
-                if (hstsIssues.length > 0) {
-                    hstsIssues.forEach(issue => {
-                        evidence.push({
-                            type: 'HSTS Configuration',
-                            description: issue,
-                            location: 'HSTS header'
-                        });
-                    });
-                    
-                    addIssue('hsts-config-weak', 'HSTS configuration could be improved', 'low', {
-                        title: 'HSTS Configuration Improvement',
-                        description: 'HSTS is configured but could be strengthened.',
-                        impact: 'Low - HSTS protection could be enhanced',
-                        solution: 'Add includeSubDomains and increase max-age to at least 1 year',
-                        evidence: evidence
-                    });
-                }
-            }
-            
-    
-            if (securityFeatures === 0) {
-                evidence.push({
-                    type: 'Security Headers',
-                    description: 'No modern security headers detected (HSTS, HPKP, Expect-CT, CSP)',
-                    location: 'HTTP response headers'
-                });
-                
-        
-                const hostname = location.hostname;
-                const isSensitiveSite = hostname.includes('login') || 
-                                      hostname.includes('pay') || 
-                                      hostname.includes('bank') ||
-                                      hostname.includes('secure') ||
-                                      document.querySelector('input[type="password"]');
-                
-                if (isSensitiveSite) {
-                    addIssue('missing-security-headers-sensitive', 'Sensitive site missing security headers', 'medium', {
-                        title: 'Missing Security Headers on Sensitive Site',
-                        description: 'Site appears to handle sensitive data but lacks modern security headers.',
-                        impact: 'Medium - Enhanced security recommended for sensitive sites',
-                        solution: 'Implement HSTS, CSP, and other security headers',
-                        evidence: evidence
-                    });
-                }
-            } else {
-        
-                evidence.push({
-                    type: 'Security Assessment',
-                    description: `${securityFeatures} modern security features detected`,
-                    location: 'Security headers analysis'
-                });
-            }
-            
-        } catch (error) {
-            console.log('Crypto strength check failed:', error);
-            
-    
-            if (error.message.toLowerCase().includes('weak') ||
-                error.message.toLowerCase().includes('insecure') ||
-                error.message.toLowerCase().includes('deprecated')) {
-                addIssue('crypto-check-error', 'Cryptographic configuration check failed', 'medium', {
-                    title: 'Cryptographic Check Error',
-                    description: 'Unable to verify cryptographic configuration strength.',
-                    impact: 'Medium - Crypto strength verification failed',
-                    solution: 'Manually verify TLS configuration and cipher suites',
-                    evidence: [{
-                        type: 'Crypto Error',
-                        description: error.message,
-                        location: 'Cryptographic assessment'
-                    }]
-                });
-            }
-        }
-    }
-    
-
-    async function getCertificateInfo() {
-        try {
-    
-            if ('connection' in navigator && navigator.connection.effectiveType) {
-                return {
-                    protocol: 'TLS (Browser API limited)',
-                    cipher: navigator.connection.effectiveType
-                };
-            }
-            
-    
-            const response = await fetch(location.origin, { method: 'HEAD' });
-            const serverTiming = response.headers.get('server-timing');
-            
-            if (serverTiming) {
-                return {
-                    protocol: 'TLS',
-                    cipher: 'Server timing available'
-                };
-            }
-            
-            return null;
-        } catch (error) {
-            return null;
-        }
-    }
-    
-    async function checkTLSConfiguration() {
-        const evidence = [];
-        
-        try {
-            const response = await fetch(location.origin, { method: 'HEAD' });
-            
-    
-            const tlsHeaders = [
-                'strict-transport-security',
-                'alt-svc', // HTTP/2 and HTTP/3 indicators
-                'x-frame-options',
-                'x-content-type-options'
-            ];
-            
-            let modernTLSFeatures = 0;
-            
-            tlsHeaders.forEach(header => {
-                        const value = response.headers.get(header);
-                        if (value) {
-                    modernTLSFeatures++;
-                            evidence.push({
-                        type: 'TLS Feature',
-                        description: `${header}: ${value.substring(0, 50)}${value.length > 50 ? '...' : ''}`,
-                                location: 'HTTP Headers'
-                            });
-                        }
-            });
-            
-    
-            const altSvc = response.headers.get('alt-svc');
-            if (altSvc) {
-                if (altSvc.includes('h3') || altSvc.includes('quic')) {
-                    evidence.push({
-                        type: 'Advanced Protocol',
-                        description: 'HTTP/3 (QUIC) support detected',
-                        location: 'Alt-Svc header'
-                    });
-                } else if (altSvc.includes('h2')) {
-                    evidence.push({
-                        type: 'Advanced Protocol',
-                        description: 'HTTP/2 support detected',
-                        location: 'Alt-Svc header'
-                    });
-                }
-            }
-            
-            if (modernTLSFeatures < 2) {
-                addIssue('minimal-tls-config', 'Minimal TLS configuration detected', 'medium', {
-                    title: 'Basic TLS Configuration',
-                    description: 'Server lacks modern TLS security features and headers.',
-                    impact: 'Medium - Missing advanced security protections',
-                    solution: 'Implement comprehensive TLS security headers and features',
-                    evidence: evidence
-                });
-            }
-            
-        } catch (error) {
-            console.log('TLS configuration check failed:', error);
-        }
-    }
-    
-    async function checkCertificateTransparencyLogs() {
-        const evidence = [];
-        
-        try {
-    
-            const hostname = location.hostname;
-            
-    
-            const response = await fetch(location.origin, { method: 'HEAD' });
-            const expectCT = response.headers.get('expect-ct');
-            
-            if (expectCT) {
-                evidence.push({
-                    type: 'Certificate Transparency',
-                    description: `Expect-CT header: ${expectCT}`,
-                    location: 'HTTP Headers'
-                });
-                
-        
-                if (expectCT.includes('enforce')) {
-                    evidence.push({
-                        type: 'CT Enforcement',
-                        description: 'Certificate Transparency enforcement enabled',
-                        location: 'Security policy'
-                    });
-                }
-                
-                if (expectCT.includes('report-uri')) {
-                    const reportMatch = expectCT.match(/report-uri="([^"]+)"/);
-                    if (reportMatch) {
-                        evidence.push({
-                            type: 'CT Reporting',
-                            description: `CT violations reporting to: ${reportMatch[1]}`,
-                            location: 'Security policy'
-                        });
-                    }
-                }
-            } else {
-                addIssue('no-ct-monitoring', 'Certificate Transparency monitoring not configured', 'low', {
-                    title: 'No Certificate Transparency Monitoring',
-                    description: 'Site does not monitor certificate transparency logs.',
-                    impact: 'Low - Reduced protection against certificate mis-issuance',
-                    solution: 'Implement Expect-CT header with monitoring',
-                    evidence: [{
-                        type: 'Missing Feature',
-                        description: 'No Expect-CT header found',
-                        location: 'Security headers'
-                    }]
-                });
-            }
-            
-        } catch (error) {
-            console.log('Certificate transparency check failed:', error);
-        }
-    }
-    
-    async function checkModernTLSFeatures() {
-        const evidence = [];
-        
-        try {
-            const response = await fetch(location.origin, { method: 'HEAD' });
-            
-    
-            const modernFeatures = {
-                'public-key-pins': 'HTTP Public Key Pinning',
-                'public-key-pins-report-only': 'HPKP Report-Only',
-                'nel': 'Network Error Logging',
-                'report-to': 'Reporting API',
-                'cross-origin-embedder-policy': 'Cross-Origin Embedder Policy',
-                'cross-origin-opener-policy': 'Cross-Origin Opener Policy',
-                'cross-origin-resource-policy': 'Cross-Origin Resource Policy'
-            };
-            
-            let modernFeatureCount = 0;
-            
-            Object.entries(modernFeatures).forEach(([header, description]) => {
-                const value = response.headers.get(header);
-                if (value) {
-                    modernFeatureCount++;
-                evidence.push({
-                        type: 'Modern Security Feature',
-                        description: `${description}: ${value.substring(0, 50)}${value.length > 50 ? '...' : ''}`,
-                        location: 'HTTP Headers'
-                    });
-                }
-            });
-            
-    
-            const deprecatedFeatures = {
-                'x-frame-options': 'Consider upgrading to Content-Security-Policy frame-ancestors',
-                'x-xss-protection': 'Consider relying on Content-Security-Policy',
-                'x-content-type-options': 'Should be supplemented with CSP'
-            };
-            
-            Object.entries(deprecatedFeatures).forEach(([header, recommendation]) => {
-                const value = response.headers.get(header);
-                if (value) {
-                    evidence.push({
-                        type: 'Legacy Security Feature',
-                        description: `${header}: ${value} (${recommendation})`,
-                        location: 'HTTP Headers'
-                    });
-                }
-            });
-            
-            if (modernFeatureCount === 0) {
-                addIssue('no-modern-tls-features', 'No modern TLS security features detected', 'medium', {
-                    title: 'Missing Modern TLS Features',
-                    description: 'Site lacks modern TLS security enhancements.',
-                    impact: 'Medium - Missing cutting-edge security protections',
-                    solution: 'Implement modern security headers like COEP, COOP, NEL',
-                    evidence: evidence
-                });
-            }
-            
-        } catch (error) {
-            console.log('Modern TLS features check failed:', error);
-        }
-    }
-    
-    async function getCertificateInfoFromBrowser() {
-
-        const certInfo = {
-            hasValidCert: false,
-            isRevoked: false,
-            issuer: null,
-            subject: null,
-            validFrom: null,
-            validTo: null,
-            fingerprint: null,
-            source: 'unknown'
-        };
-        
-        try {
-    
-            if (typeof chrome !== 'undefined' && chrome.certificateProvider) {
-                try {
-                    const certs = await chrome.certificateProvider.getCertificates();
-                    if (certs && certs.length > 0) {
-                        const cert = certs[0];
-                        certInfo.hasValidCert = true;
-                        certInfo.isRevoked = cert.revoked || false;
-                        certInfo.issuer = cert.issuer;
-                        certInfo.subject = cert.subject;
-                        certInfo.source = 'chrome-api';
-                        return certInfo;
-                    }
-                } catch (e) {
-                    console.debug('Chrome certificate API not available:', e.message);
-                }
-            }
-            
-    
-            if (window.crypto && window.crypto.subtle) {
-                try {
-            
-                    await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(location.hostname));
-                    certInfo.hasValidCert = true;
-                    certInfo.source = 'webcrypto';
-                } catch (e) {
-                    console.debug('WebCrypto validation failed:', e.message);
-                }
-            }
-            
-    
-            if (performance && performance.getEntriesByType) {
-                try {
-                    const navEntries = performance.getEntriesByType('navigation');
-                    if (navEntries.length > 0) {
-                        const entry = navEntries[0];
-                
-                        if (location.protocol === 'https:' && entry.secureConnectionStart > 0) {
-                            certInfo.hasValidCert = true;
-                            certInfo.source = 'performance-api';
-                        }
-                    }
-                } catch (e) {
-                    console.debug('Performance API check failed:', e.message);
-                }
-            }
-            
-    
-            if (location.protocol === 'https:' && document.readyState === 'complete') {
-                certInfo.hasValidCert = true;
-                certInfo.source = 'https-connection';
-            }
-            
-        } catch (error) {
-            console.debug('Certificate info gathering failed:', error.message);
-        }
-        
-        return certInfo;
-    }
-
-    async function checkCertificateValidity() {
-        const evidence = [];
-        
-        try {
-    
-            const browserCertInfo = await getCertificateInfoFromBrowser();
-            
-                evidence.push({
-                type: 'Certificate Detection',
-                description: `Certificate info source: ${browserCertInfo.source}`,
-                location: 'Browser validation'
-            });
-            
-    
-            if (browserCertInfo.isRevoked) {
-                addIssue('certificate-revoked-browser', 'Certificate revoked (confirmed by browser)', 'critical', {
-                    title: 'Revoked Certificate Detected',
-                    description: 'Browser APIs confirm this certificate has been revoked.',
-                    impact: 'Critical - Certificate is invalid and site will be inaccessible',
-                    solution: 'Replace certificate immediately',
-                    evidence: evidence
-                });
-                return;
-            }
-            
-    
-            const certificateTests = [
-                { name: 'Self-Signed', test: testSelfSigned },
-                { name: 'Expired', test: testExpiredCert },
-                { name: 'Wrong Hostname', test: testWrongHostname },
-                { name: 'Untrusted Root', test: testUntrustedRoot },
-                { name: 'Revoked', test: testRevokedCert },
-                { name: 'Weak Key', test: testWeakKey },
-                { name: 'Incomplete Chain', test: testIncompleteChain },
-                { name: 'Mixed CA', test: testMixedCA }
-            ];
-            
-            const testResults = [];
-            let criticalIssues = 0;
-            let totalTests = certificateTests.length;
-            
-            for (const testCase of certificateTests) {
-                try {
-                    const result = await testCase.test();
-                    testResults.push({ ...result, testName: testCase.name });
-                    
-                    if (result.hasIssue) {
-                        criticalIssues++;
-                        evidence.push({
-                            type: 'Certificate Issue',
-                            description: `${testCase.name}: ${result.description}`,
-                            location: 'Certificate validation'
-                        });
-                        
-                
-                        if (testCase.name === 'Revoked' || 
-                            testCase.name === 'Expired' ||
-                            (testCase.name === 'Self-Signed' && !location.hostname.includes('localhost'))) {
-                            
-                            addIssue(`cert-${testCase.name.toLowerCase().replace(' ', '-')}`, 
-                                     `Certificate issue: ${testCase.name}`, 
-                                     'high', {
-                                title: `Certificate ${testCase.name} Issue`,
-                                description: result.description,
-                                impact: result.impact,
-                                solution: result.solution,
-                evidence: evidence
-            });
-                        }
-                    }
-                } catch (testError) {
-                    console.debug(`Certificate test "${testCase.name}" failed:`, testError.message);
-            
-                }
-            }
-            
-    
-            evidence.push({
-                type: 'Certificate Validation',
-                description: `${criticalIssues} of ${totalTests} certificate tests failed`,
-                location: 'Certificate validation suite'
-            });
-            
-    
-            if (criticalIssues >= 3 || 
-                (criticalIssues >= 1 && testResults.some(r => r.testName === 'Revoked' && r.hasIssue))) {
-                
-                addIssue('certificate-validity-issues', 'Multiple certificate validation issues', 'high', {
-                    title: 'Certificate Validation Issues',
-                    description: `Certificate failed ${criticalIssues} of ${totalTests} validation tests.`,
-                    impact: 'High - Certificate may not be trustworthy',
-                    solution: 'Review and fix certificate configuration issues',
-                    evidence: evidence
-                });
-            } else if (criticalIssues > 0) {
-        
-                evidence.push({
-                    type: 'Certificate Status',
-                    description: `Minor certificate issues detected (${criticalIssues} tests failed)`,
-                    location: 'Certificate assessment'
-                });
-            } else {
-        
-                evidence.push({
-                    type: 'Certificate Status',
-                    description: 'All certificate validation tests passed',
-                    location: 'Certificate assessment'
-                });
-            }
-            
-        } catch (error) {
-            console.log('Certificate validity check failed:', error);
-            
-    
-            if (error.message.toLowerCase().includes('certificate') ||
-                error.message.toLowerCase().includes('ssl') ||
-                error.message.toLowerCase().includes('tls')) {
-                
-                addIssue('certificate-validation-error', 'Certificate validation error', 'medium', {
-                    title: 'Certificate Validation Error',
-                    description: 'Error occurred during certificate validation.',
-                    impact: 'Medium - Unable to verify certificate status',
-                    solution: 'Check certificate configuration and network connectivity',
-                    evidence: [{
-                        type: 'Validation Error',
-                        description: error.message,
-                        location: 'Certificate validation'
-                    }]
-                });
-            }
-        }
-    }
-
-    async function checkCertificateChain() {
-        const evidence = [];
-        
-        try {
-    
-            const response = await fetch(location.origin, { method: 'HEAD' });
-            
-    
-            const chainHeaders = [
-                'x-certificate-chain',
-                'x-ssl-certificate',
-                'certificate-transparency',
-                'x-certificate-transparency',
-                'x-ct-sct-source'
-            ];
-            
-            let chainInfoFound = false;
-            chainHeaders.forEach(header => {
-                const value = response.headers.get(header);
-                if (value) {
-                    chainInfoFound = true;
-                    evidence.push({
-                        type: 'Certificate Chain Info',
-                        description: `${header}: present`,
-                        location: 'HTTP Headers'
-                    });
-                }
-            });
-            
-    
-            const serverHeader = response.headers.get('server');
-            const hstsHeader = response.headers.get('strict-transport-security');
-            const expectCTHeader = response.headers.get('expect-ct');
-            
-    
-            const chainQualityIndicators = [
-                !!hstsHeader,
-                !!expectCTHeader,
-                !!response.headers.get('x-frame-options'),
-                !!response.headers.get('x-content-type-options')
-            ].filter(Boolean).length;
-            
-            if (chainQualityIndicators < 2) {
-                addIssue('potentially-incomplete-cert-chain', 'Potentially incomplete certificate chain', 'medium', {
-                    title: 'Potentially Incomplete Certificate Chain',
-                    description: 'Certificate chain may be incomplete based on missing security headers.',
-                    impact: 'Medium - Some clients may have difficulty validating certificate',
-                    solution: 'Verify complete certificate chain including intermediate certificates',
-                    evidence: evidence.length > 0 ? evidence : [{
-                        type: 'Missing Indicators',
-                        description: 'Few chain quality indicators found',
-                        location: 'Security headers analysis'
-                    }]
-                });
-            }
-            
-    
-            const userAgent = navigator.userAgent;
-            if (userAgent.includes('Mobile') && chainQualityIndicators < 3) {
-            evidence.push({
-                    type: 'Mobile Compatibility',
-                    description: 'Mobile browser detected with potentially incomplete chain',
-                    location: 'User agent analysis'
-                });
-                
-                addIssue('mobile-cert-chain-issues', 'Potential mobile certificate issues', 'medium', {
-                    title: 'Mobile Certificate Chain Issues',
-                    description: 'Certificate chain may cause issues on mobile devices.',
-                    impact: 'Medium - Mobile users may experience connection problems',
-                    solution: 'Ensure complete certificate chain with all intermediate certificates',
-                    evidence: evidence
-                });
-            }
-            
-        } catch (error) {
-            console.log('Certificate chain check failed:', error);
-            
-            if (error.message.toLowerCase().includes('chain') ||
-                error.message.toLowerCase().includes('intermediate')) {
-                addIssue('cert-chain-error', 'Certificate chain validation error', 'high', {
-                    title: 'Certificate Chain Error',
-                    description: 'Error occurred while validating certificate chain.',
-                    impact: 'High - Certificate chain may be broken',
-                    solution: 'Check certificate chain configuration',
-                    evidence: [{
-                        type: 'Chain Error',
-                        description: error.message,
-                        location: 'Certificate validation'
-                    }]
-                });
-            }
-        }
-    }
-
-    async function checkCertificateRevocation() {
-        const evidence = [];
-        
-        try {
-    
-            const response = await fetch(location.origin, { method: 'HEAD' });
-            
-            const revocationHeaders = [
-                'ocsp-response',
-                'crl-distribution-points',
-                'authority-info-access',
-                'x-ocsp-response',
-                'x-certificate-status'
-            ];
-            
-            let hasRevocationCheck = false;
-            let ocspStaplingEnabled = false;
-            let revocationStatus = 'unknown';
-            
-            revocationHeaders.forEach(header => {
-                const value = response.headers.get(header);
-                if (value) {
-                    hasRevocationCheck = true;
-                    evidence.push({
-                        type: 'Revocation Check',
-                        description: `${header}: configured`,
-                        location: 'Certificate headers'
-                    });
-                    
-                    if (header.includes('ocsp')) {
-                        ocspStaplingEnabled = true;
-                        
-                
-                        const lowerValue = value.toLowerCase();
-                        if (lowerValue.includes('good') || lowerValue.includes('status: good')) {
-                            revocationStatus = 'good';
-                        } else if (lowerValue.includes('revoked')) {
-                            revocationStatus = 'revoked';
-                        }
-                    }
-                }
-            });
-            
-    
-            const expectCTHeader = response.headers.get('expect-ct');
-            if (expectCTHeader && expectCTHeader.includes('must-staple')) {
-            evidence.push({
-                    type: 'OCSP Must-Staple',
-                    description: 'Certificate requires OCSP stapling',
-                    location: 'Certificate policy'
-                });
-                
-                if (!ocspStaplingEnabled) {
-                    addIssue('ocsp-must-staple-violation', 'OCSP Must-Staple policy violation', 'high', {
-                        title: 'OCSP Must-Staple Violation',
-                        description: 'Certificate requires OCSP stapling but it\'s not configured.',
-                        impact: 'High - Certificate policy violation',
-                        solution: 'Configure OCSP stapling on web server',
-                        evidence: evidence
-                    });
-                }
-            }
-            
-    
-    
-            if (!hasRevocationCheck) {
-        
-                const hostname = location.hostname;
-                const isHighValueTarget = hostname.includes('bank') || 
-                                        hostname.includes('pay') || 
-                                        hostname.includes('secure') ||
-                                        hostname.includes('admin') ||
-                                        hostname.includes('api');
-                
-                if (isHighValueTarget) {
-                    addIssue('no-revocation-check-high-value', 'High-value site without explicit revocation checking', 'medium', {
-                        title: 'Missing Revocation Checking for High-Value Site',
-                        description: 'High-value domains should implement explicit certificate revocation checking.',
-                        impact: 'Medium - Recommended security enhancement for sensitive sites',
-                        solution: 'Consider implementing OCSP stapling for improved security assurance',
-                        evidence: [{
-                            type: 'Security Recommendation',
-                            description: 'High-value domain detected without explicit revocation checking',
-                            location: 'Security best practices'
-                        }]
-                    });
-                } else {
-            
-                evidence.push({
-                        type: 'Revocation Info',
-                        description: 'No explicit revocation checking configured (this is normal for most sites)',
-                        location: 'Certificate configuration'
-                    });
-                }
-            } else if (ocspStaplingEnabled) {
-                evidence.push({
-                    type: 'OCSP Stapling',
-                    description: `OCSP stapling enabled - Status: ${revocationStatus}`,
-                    location: 'Certificate validation'
-                });
-                
-        
-                if (revocationStatus === 'revoked') {
-                    addIssue('certificate-revoked', 'Certificate is revoked', 'critical', {
-                        title: 'Revoked Certificate Detected',
-                        description: 'The certificate has been revoked by the certificate authority.',
-                        impact: 'Critical - Site will be inaccessible to users',
-                        solution: 'Replace certificate immediately',
-                        evidence: evidence
-                    });
-                }
-            }
-            
-        } catch (error) {
-            console.log('Revocation check failed:', error);
-            
-    
-            if (error.message.toLowerCase().includes('revoked') ||
-                error.message.toLowerCase().includes('ocsp') && error.message.toLowerCase().includes('fail')) {
-                addIssue('revocation-check-error', 'Certificate revocation check failed', 'medium', {
-                    title: 'Revocation Check Error',
-                    description: 'Error occurred while checking certificate revocation status.',
-                    impact: 'Medium - Unable to verify certificate validity',
-                    solution: 'Verify certificate status manually with certificate authority',
-                    evidence: [{
-                        type: 'Revocation Error',
-                        description: error.message,
-                        location: 'Certificate validation'
-                    }]
-                });
-            }
-        }
-    }
-    
-    async function testSSLVulnerabilities() {
-        const evidence = [];
-        
-
-        const vulnerabilityTests = [
-            {
-                name: 'POODLE',
-                description: 'Tests for SSLv3 POODLE vulnerability (CVE-2014-3566)',
-                test: () => testPOODLE()
-            },
-            {
-                name: 'BEAST',
-                description: 'Tests for TLS 1.0 BEAST vulnerability (CVE-2011-3389)',
-                test: () => testBEAST()
-            },
-            {
-                name: 'Heartbleed',
-                description: 'Tests for OpenSSL Heartbleed vulnerability (CVE-2014-0160)',
-                test: () => testHeartbleed()
-            },
-            {
-                name: 'FREAK',
-                description: 'Tests for FREAK vulnerability (CVE-2015-0204)',
-                test: () => testFREAK()
-            },
-            {
-                name: 'Logjam',
-                description: 'Tests for Logjam vulnerability (CVE-2015-4000)',
-                test: () => testLogjam()
-            },
-            {
-                name: 'CRIME',
-                description: 'Tests for CRIME compression vulnerability',
-                test: () => testCRIME()
-            },
-            {
-                name: 'BREACH',
-                description: 'Tests for BREACH compression vulnerability',
-                test: () => testBREACH()
-            }
-        ];
-        
-        const vulnerabilityResults = [];
-        
-        for (const vulnTest of vulnerabilityTests) {
-            try {
-                const result = await vulnTest.test();
-                vulnerabilityResults.push({ ...result, testName: vulnTest.name });
-                
-                if (result.vulnerable) {
-                    evidence.push({
-                        type: 'SSL Vulnerability',
-                        description: `${vulnTest.name}: ${result.description}`,
-                        location: 'SSL/TLS configuration'
-                    });
-                    
-                    addIssue(`ssl-vuln-${vulnTest.name.toLowerCase()}`, 
-                             `SSL vulnerability: ${vulnTest.name}`, 
-                             'high', {
-                        title: `SSL/TLS Vulnerability: ${vulnTest.name}`,
-                        description: `${vulnTest.description} - ${result.description}`,
-                        impact: 'High - SSL/TLS connection can be compromised',
-                        solution: result.solution,
-                        evidence: evidence,
-                        references: [{
-                            title: `${vulnTest.name} Vulnerability Info`,
-                            url: result.referenceUrl || 'https://www.owasp.org/index.php/Transport_Layer_Protection_Cheat_Sheet'
-                    }]
-                });
-                }
-            } catch (e) {
-        
-                console.debug(`SSL vulnerability test "${vulnTest.name}" failed:`, e.message);
-            }
-        }
-        
-
-        const vulnerabilities = vulnerabilityResults.filter(r => r.vulnerable);
-        if (vulnerabilities.length === 0) {
-            evidence.push({
-                type: 'SSL Vulnerability Scan',
-                description: `All ${vulnerabilityResults.length} SSL vulnerability tests passed`,
-                location: 'SSL security assessment'
-            });
-        } else {
-            evidence.push({
-                type: 'SSL Vulnerability Scan',
-                description: `${vulnerabilities.length} of ${vulnerabilityResults.length} SSL vulnerability tests failed`,
-                location: 'SSL security assessment'
-            });
-        }
-    }
-
-    async function testCRIME() {
-
-        try {
-            const response = await fetch(location.origin, { method: 'HEAD' });
-            
-    
-    
-            
-    
-            const serverHeader = response.headers.get('server');
-            const serverLower = serverHeader ? serverHeader.toLowerCase() : '';
-            
-    
-            const hasOldTLS = serverLower.includes('tls/1.0') || 
-                             serverLower.includes('tls 1.0') ||
-                             serverLower.includes('ssl') ||
-                             serverLower.includes('openssl/0.') ||
-                             serverLower.includes('openssl/1.0');
-            
-    
-            const contentEncoding = response.headers.get('content-encoding');
-            const hasHttpCompression = contentEncoding && 
-                (contentEncoding.includes('gzip') || 
-                 contentEncoding.includes('deflate') || 
-                 contentEncoding.includes('compress'));
-            
-    
-            const securityHeaders = {
-                hsts: response.headers.get('strict-transport-security'),
-                csp: response.headers.get('content-security-policy'),
-                frameOptions: response.headers.get('x-frame-options')
-            };
-            
-            const protectionCount = Object.values(securityHeaders).filter(Boolean).length;
-            
-    
-            if (hasOldTLS && hasHttpCompression) {
-        
-                const modernServerIndicators = [
-                    serverLower.includes('nginx/1.'),
-                    serverLower.includes('apache/2.4'),
-                    serverLower.includes('cloudflare'),
-                    serverLower.includes('h2'), // HTTP/2 support
-                    !!response.headers.get('alt-svc') // Alternative services header
-                ].filter(Boolean).length;
-                
-                if (modernServerIndicators < 2) {
-                    return {
-                        vulnerable: true,
-                        description: 'Potential CRIME vulnerability (old TLS version with compression)',
-                        solution: 'Upgrade to TLS 1.2+ and disable TLS compression',
-                        referenceUrl: 'https://en.wikipedia.org/wiki/CRIME'
-                    };
-                }
-            }
-            
-    
-    
-            const userAgent = navigator.userAgent.toLowerCase();
-            const modernBrowser = userAgent.includes('chrome') || 
-                                 userAgent.includes('firefox') ||
-                                 userAgent.includes('safari') ||
-                                 userAgent.includes('edge');
-            
-            if (modernBrowser && protectionCount >= 2) {
-        return {
-            vulnerable: false,
-                    description: 'CRIME vulnerability mitigated by modern browser and server protections',
-                    solution: 'Continue monitoring TLS configuration',
-                    referenceUrl: 'https://en.wikipedia.org/wiki/CRIME'
-                };
-            }
-            
-    
-            if (hasHttpCompression && !securityHeaders.hsts) {
-        
-                const hasSessionCookies = document.cookie.includes('session') || 
-                                         document.cookie.includes('auth') ||
-                                         document.cookie.includes('login');
-                
-                if (hasSessionCookies) {
-                    return {
-                        vulnerable: true,
-                        description: 'Potential CRIME risk (compression + session cookies without HSTS)',
-                        solution: 'Implement HSTS and monitor TLS compression settings',
-                        referenceUrl: 'https://en.wikipedia.org/wiki/CRIME'
-                    };
-                }
-            }
-            
-    
-            if (hasHttpCompression) {
-        return {
-            vulnerable: false,
-                    description: 'HTTP compression detected but CRIME risk minimal with current configuration',
-                    solution: 'Ensure TLS compression is disabled on server',
-                    referenceUrl: 'https://en.wikipedia.org/wiki/CRIME'
-                };
-            } else {
-                return {
-                    vulnerable: false,
-                    description: 'No compression detected - not vulnerable to CRIME',
-                    solution: 'Continue monitoring compression settings',
-                    referenceUrl: 'https://en.wikipedia.org/wiki/CRIME'
-                };
-            }
-            
-        } catch (error) {
-        return {
-            vulnerable: false,
-                description: 'CRIME assessment inconclusive due to error',
-                solution: 'Manual verification of TLS compression settings recommended',
-                referenceUrl: 'https://en.wikipedia.org/wiki/CRIME'
-            };
-        }
-    }
-
-    async function testBREACH() {
-
-        try {
-            const response = await fetch(location.origin, { method: 'HEAD' });
-            
-    
-            
-    
-            if (location.protocol !== 'https:') {
-        return {
-            vulnerable: false,
-                    description: 'No BREACH vulnerability - site not using HTTPS',
-                    solution: 'Not applicable for HTTP sites',
-                    referenceUrl: 'https://breachattack.com/'
-                };
-            }
-            
-    
-            const contentEncoding = response.headers.get('content-encoding');
-            const varyHeader = response.headers.get('vary');
-            const acceptEncoding = response.headers.get('accept-encoding');
-            
-            const hasHttpCompression = contentEncoding && 
-                (contentEncoding.includes('gzip') || contentEncoding.includes('deflate') || contentEncoding.includes('br'));
-            
-            if (!hasHttpCompression) {
-        return {
-            vulnerable: false,
-                    description: 'No BREACH vulnerability - HTTP compression not detected',
-                    solution: 'Continue monitoring compression settings',
-                    referenceUrl: 'https://breachattack.com/'
-                };
-            }
-            
-    
-            const securityHeaders = {
-                csp: response.headers.get('content-security-policy'),
-                csrf: response.headers.get('x-csrf-token') || response.headers.get('csrf-token'),
-                frameOptions: response.headers.get('x-frame-options'),
-                sameSite: document.cookie.includes('SameSite='),
-                strictTransport: response.headers.get('strict-transport-security')
-            };
-            
-    
-            let protectionCount = 0;
-            if (securityHeaders.csp && securityHeaders.csp.includes('frame-ancestors')) protectionCount++;
-            if (securityHeaders.csrf) protectionCount++;
-            if (securityHeaders.frameOptions) protectionCount++;
-            if (securityHeaders.sameSite) protectionCount++;
-            if (securityHeaders.strictTransport) protectionCount++;
-            
-    
-            const sensitiveInputs = document.querySelectorAll(
-                'input[type="password"], input[name*="password"], input[name*="token"], ' +
-                'input[name*="secret"], input[name*="key"], input[name*="csrf"]'
-            );
-            
-            const forms = document.querySelectorAll('form');
-            let hasAuthForms = false;
-            forms.forEach(form => {
-                const action = form.getAttribute('action') || '';
-                if (action.includes('login') || action.includes('auth') || 
-                    action.includes('signin') || action.includes('password')) {
-                    hasAuthForms = true;
-                }
-            });
-            
-    
-            const bodyText = document.body.textContent.toLowerCase();
-            const reflectsSecrets = bodyText.includes('csrf') || 
-                                  bodyText.includes('session') ||
-                                  bodyText.includes('token') ||
-                                  (document.querySelector('meta[name="csrf-token"]') !== null);
-            
-    
-            const riskFactors = {
-                hasCompression: hasHttpCompression,
-                hasSensitiveInputs: sensitiveInputs.length > 0,
-                hasAuthForms: hasAuthForms,
-                reflectsSecrets: reflectsSecrets,
-                protectionMechanisms: protectionCount
-            };
-            
-    
-            const highRiskConditions = [
-                riskFactors.hasSensitiveInputs,
-                riskFactors.hasAuthForms,
-                riskFactors.reflectsSecrets
-            ].filter(Boolean).length;
-            
-            if (highRiskConditions >= 2 && protectionCount < 2) {
-        
-                const hasJavaScript = document.scripts.length > 0;
-                const hasAjax = document.body.innerHTML.includes('ajax') || 
-                               document.body.innerHTML.includes('xhr') ||
-                               document.body.innerHTML.includes('fetch');
-                
-                if (hasJavaScript || hasAjax) {
-                    return {
-                        vulnerable: true,
-                        description: `Potential BREACH vulnerability detected (compression + ${highRiskConditions} risk factors, ${protectionCount} protections)`,
-                        solution: 'Implement CSRF tokens, disable compression for sensitive responses, or use length-hiding techniques',
-                        referenceUrl: 'https://breachattack.com/'
-                    };
-                }
-            }
-            
-    
-            const currentUrl = window.location.href;
-            const isAPIEndpoint = currentUrl.includes('/api/') || 
-                                 currentUrl.includes('/rest/') ||
-                                 currentUrl.includes('.json') ||
-                                 document.querySelector('script[type="application/json"]');
-            
-            if (isAPIEndpoint && reflectsSecrets && protectionCount === 0) {
-                return {
-                    vulnerable: true,
-                    description: 'BREACH vulnerability in API endpoint with secret reflection',
-                    solution: 'Disable compression for API responses containing secrets',
-                    referenceUrl: 'https://breachattack.com/'
-                };
-            }
-            
-    
-            if (protectionCount >= 3) {
-                return {
-                    vulnerable: false,
-                    description: `BREACH risk mitigated by ${protectionCount} protection mechanisms`,
-                    solution: 'Continue monitoring compression and secret handling',
-                    referenceUrl: 'https://breachattack.com/'
-                };
-            }
-            
-    
-            return {
-                vulnerable: false,
-                description: 'HTTP compression detected but BREACH risk appears minimal',
-                solution: 'Monitor for secret reflection in compressed responses',
-                referenceUrl: 'https://breachattack.com/'
-            };
-            
-        } catch (error) {
-            return {
-                vulnerable: false,
-                description: 'BREACH assessment inconclusive due to error',
-                solution: 'Manual verification recommended',
-                referenceUrl: 'https://breachattack.com/'
-            };
-        }
-    }
     
     function checkMixedContent() {
         const evidence = [];
-        
-
         const httpResources = document.querySelectorAll('img[src^="http:"], script[src^="http:"], link[href^="http:"], iframe[src^="http:"]');
         
         if (httpResources.length > 0 && location.protocol === 'https:') {
@@ -3668,9 +2201,9 @@
         if (evidence.some(e => e.type === 'Insecure WebSocket')) {
             addIssue('insecure-websocket', 'Insecure WebSocket connections detected', 'high', {
                 title: 'Insecure WebSocket Protocol',
-                description: 'WebSocket connections using unencrypted ws:// protocol.',
+                description: 'WebSocket connections using unencrypted ws:// protocol detected',
                 impact: 'High - WebSocket traffic can be intercepted',
-                solution: 'Use wss:// for encrypted WebSocket connections',
+                solution: 'Use wss:// for secure WebSocket connections',
                 evidence: evidence.filter(e => e.type === 'Insecure WebSocket')
             });
         }
@@ -4005,13 +2538,9 @@
 
     function checkModernSecurityFeatures() {
         const evidence = [];
-        
-
         const scriptsWithSRI = document.querySelectorAll('script[integrity]');
-        const linksWithSRI = document.querySelectorAll('link[integrity]');
         const externalScripts = document.querySelectorAll('script[src]:not([integrity])');
-        const externalLinks = document.querySelectorAll('link[rel="stylesheet"][href]:not([integrity])');
-
+        c
         if (externalScripts.length > 0 && scriptsWithSRI.length === 0) {
             evidence.push({
                 type: 'Missing SRI',
@@ -4196,7 +2725,7 @@
 
     function initializeScanner() {
         try {
-            // Prevent multiple scanner instances
+            
             if (window.securityScannerInitialized) {
                 logMessage('Scanner already initialized, skipping duplicate initialization', 'info');
                 return;
@@ -4205,18 +2734,18 @@
             logMessage('Initializing Security Scanner Pro...', 'info');
             window.securityScannerInitialized = true;
             
-            // Check whitelist status first
+            
             checkWhitelistStatus().then(isWhitelisted => {
                 if (isWhitelisted && !window.manualScanTriggered) {
                     logMessage('Site is whitelisted, skipping auto-scan', 'info');
                     return;
                 }
                 
-                // Continue with initialization
+                
                 continueInitialization();
             }).catch(error => {
                 logMessage('Error checking whitelist status: ' + error.message, 'warning');
-                // Continue with initialization even if whitelist check fails
+                
                 continueInitialization();
             });
 
@@ -4226,7 +2755,7 @@
         }
     }
 
-    // Check if current site is whitelisted
+    
     async function checkWhitelistStatus() {
         try {
             const hostname = window.location.hostname;
@@ -4250,7 +2779,7 @@
         }
     }
 
-    // Continue with scanner initialization (extracted from original initializeScanner)
+    
     function continueInitialization() {
         try {
             
@@ -4351,16 +2880,16 @@
         function handleScanError(error) {
             logMessage(`Scanner error: ${error.message}`, 'error');
             
-            // Ensure scan is marked as complete to prevent hanging
+            
             scanComplete = true;
             
-            // Update bubble to show error state
+            
             if (bubble) {
                 bubble.innerHTML = '✗<br><span style="font-size: 10px; margin-top: 4px;">ERROR</span>';
                 bubble.style.backgroundColor = '#c53030';
             }
             
-            // Create detailed error results
+            
             const errorResults = {
                 url: window.location.href,
                 vulnerabilityCount: 0,
@@ -4378,7 +2907,7 @@
                 }
             };
             
-            // Dispatch error event with retry information
+            
             try {
                 window.dispatchEvent(new CustomEvent('securityScanComplete', {
                     detail: errorResults
@@ -4387,7 +2916,7 @@
             } catch (dispatchError) {
                 console.error('Failed to dispatch error event:', dispatchError);
                 
-                // Fallback: try to communicate error via console for debugging
+                
                 console.error('Scanner Error Details:', {
                     originalError: error,
                     errorResults: errorResults,
@@ -4395,15 +2924,15 @@
                 });
             }
             
-            // Additional cleanup
+            
             try {
-                // Stop any ongoing monitoring
+                
                 if (typeof monitoringInterval !== 'undefined' && monitoringInterval) {
                     clearInterval(monitoringInterval);
                     monitoringInterval = null;
                 }
                 
-                // Reset scan state
+                
                 if (typeof issues !== 'undefined') {
                     issues.clear();
                 }
@@ -4474,399 +3003,6 @@
             initializeScanner();
         }
     };
-
-
-    function checkAPIKeys() {
-        const evidence = [];
-        
-
-        const excludePatterns = [
-            /integrity\s*=/, // SRI hashes
-            /sha\d+-/, // SHA hashes
-            /\.(js|css|png|jpg|jpeg|gif|svg|woff|woff2|ttf|eot)/, // File extensions
-            /webpack/, // Webpack hashes
-            /chunk/, // Code chunks
-            /manifest/, // Manifest files
-            /vendor/, // Vendor files
-            /assets?\//, // Asset paths
-            /build\//, // Build paths
-            /dist\//, // Distribution paths
-            /node_modules/, // Node modules
-            /\.min\./, // Minified files
-            /sourceMappingURL/, // Source maps
-            /\/\*.*?\*\//, // CSS comments
-            /<!--.*?-->/, // HTML comments
-            /\/\/.*/, // JS comments
-            /data:image/, // Data URLs for images
-            /base64/, // Base64 data
-            /charset/, // Character set declarations
-            /encoding/, // Encoding declarations
-            /version/, // Version strings
-            /hash/, // Generic hash references
-            /checksum/, // Checksum references
-            /fingerprint/, // Fingerprint references
-            /etag/, // ETags
-            /cache/, // Cache identifiers
-        ];
-
-
-        const apiKeyPatterns = [
-    
-            { 
-                pattern: /\bAKIA[0-9A-Z]{16}\b/, 
-                type: 'AWS Access Key', 
-                severity: 'critical',
-                validate: (match, context) => {
-            
-                    return match.length === 20 && /^AKIA[0-9A-Z]{16}$/.test(match);
-                }
-            },
-            
-    
-            { 
-                pattern: /\bAIza[0-9A-Za-z\-_]{35}\b/, 
-                type: 'Google API Key', 
-                severity: 'high',
-                validate: (match, context) => {
-                    return match.length === 39 && /^AIza[0-9A-Za-z\-_]{35}$/.test(match);
-                }
-            },
-            
-    
-            { 
-                pattern: /\bgh[pousr]_[a-zA-Z0-9]{36}\b/, 
-                type: 'GitHub Token', 
-                severity: 'critical',
-                validate: (match, context) => {
-                    return /^gh[pousr]_[a-zA-Z0-9]{36}$/.test(match);
-                }
-            },
-            
-    
-            { 
-                pattern: /\bxox[baprs]-[0-9a-zA-Z]{10,50}\b/, 
-                type: 'Slack Token', 
-                severity: 'high',
-                validate: (match, context) => {
-                    return /^xox[baprs]-[0-9a-zA-Z]{10,50}$/.test(match);
-                }
-            },
-            
-    
-            { 
-                pattern: /\bsk_(?:live|test)_[0-9a-zA-Z]{24}\b/, 
-                type: 'Stripe Secret Key', 
-                severity: 'critical',
-                validate: (match, context) => {
-                    return /^sk_(?:live|test)_[0-9a-zA-Z]{24}$/.test(match);
-                }
-            },
-            { 
-                pattern: /\bpk_(?:live|test)_[0-9a-zA-Z]{24}\b/, 
-                type: 'Stripe Publishable Key', 
-                severity: 'medium',
-                validate: (match, context) => {
-                    return /^pk_(?:live|test)_[0-9a-zA-Z]{24}$/.test(match);
-                }
-            },
-            
-    
-            { 
-                pattern: /\bSG\.[a-zA-Z0-9_-]{22}\.[a-zA-Z0-9_-]{43}\b/, 
-                type: 'SendGrid API Key', 
-                severity: 'high',
-                validate: (match, context) => {
-                    return /^SG\.[a-zA-Z0-9_-]{22}\.[a-zA-Z0-9_-]{43}$/.test(match);
-                }
-            },
-            
-    
-            { 
-                pattern: /\bSK[a-z0-9]{32}\b/, 
-                type: 'Twilio API Key', 
-                severity: 'high',
-                validate: (match, context) => {
-                    return /^SK[a-z0-9]{32}$/.test(match);
-                }
-            },
-            
-    
-            { 
-                pattern: /\bsq0atp-[0-9A-Za-z\-_]{22}\b/, 
-                type: 'Square Access Token', 
-                severity: 'high',
-                validate: (match, context) => {
-                    return /^sq0atp-[0-9A-Za-z\-_]{22}$/.test(match);
-                }
-            },
-            
-    
-            { 
-                pattern: /\baccess_token\$production\$[a-z0-9]{16}\$[a-f0-9]{32}\b/, 
-                type: 'PayPal Access Token', 
-                severity: 'critical',
-                validate: (match, context) => {
-                    return /^access_token\$production\$[a-z0-9]{16}\$[a-f0-9]{32}$/.test(match);
-                }
-            },
-            
-    
-            { 
-                pattern: /\bkey-[a-z0-9]{32}\b/, 
-                type: 'Mailgun API Key', 
-                severity: 'medium',
-                validate: (match, context) => {
-                    return /^key-[a-z0-9]{32}$/.test(match);
-                }
-            },
-            
-    
-            { 
-                pattern: /\beyJ[a-zA-Z0-9_-]+\.eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\b/, 
-                type: 'JWT Token', 
-                severity: 'medium',
-                validate: (match, context) => {
-                    const parts = match.split('.');
-                    return parts.length === 3 && parts.every(part => part.length > 10);
-                }
-            },
-            
-    
-            { 
-                pattern: /-----BEGIN (?:RSA )?PRIVATE KEY-----/, 
-                type: 'Private Key', 
-                severity: 'critical',
-                validate: (match, context) => {
-                    return context.includes('-----END') && context.length > 100;
-                }
-            },
-            { 
-                pattern: /-----BEGIN OPENSSH PRIVATE KEY-----/, 
-                type: 'SSH Private Key', 
-                severity: 'critical',
-                validate: (match, context) => {
-                    return context.includes('-----END') && context.length > 100;
-                }
-            },
-            
-    
-            { 
-                pattern: /(?:api[_-]?key|apikey)['":\s]*['"]([a-zA-Z0-9]{20,})['"]/i, 
-                type: 'Generic API Key', 
-                severity: 'medium',
-                validate: (match, context) => {
-            
-                    const keyMatch = context.match(/(?:api[_-]?key|apikey)['":\s]*['"]([a-zA-Z0-9]{20,})['"]/i);
-                    if (!keyMatch) return false;
-                    const keyValue = keyMatch[1];
-                    
-            
-                    const placeholders = [
-                        /^(your|my|test|demo|sample|example|placeholder|fake|dummy)[\w_-]*$/i,
-                        /^[a-z]+$/i, // All lowercase letters only
-                        /^[A-Z]+$/i, // All uppercase letters only
-                        /^1+$/,  
-                        /^0+$/,  
-                        /^x+$/i, 
-                        /^key$/i,
-                        /^token$/i,  // Just "token"
-                        /^secret$/i, // Just "secret"
-                        /^[a-f0-9]{32}$/i, // Looks like MD5 hash
-                        /^[a-f0-9]{40}$/i, // Looks like SHA1 hash
-                        /^[a-f0-9]{64}$/i, // Looks like SHA256 hash
-                    ];
-                    
-                    return !placeholders.some(pattern => pattern.test(keyValue)) && keyValue.length >= 20;
-                }
-            },
-            
-    
-            { 
-                pattern: /(?:mongodb|postgres|mysql):\/\/[^\s'"<>{}|\\\^`\[\]]+/i, 
-                type: 'Database Connection String', 
-                severity: 'high',
-                validate: (match, context) => {
-            
-                    return /@/.test(match) && 
-                           !/(localhost|127\.0\.0\.1|example\.com|test\.com)/.test(match) &&
-                           !/(?:user|password|your|my|test|demo|sample|example|placeholder)/.test(match);
-                }
-            }
-        ];
-
-
-        function shouldExclude(match, context) {
-            return excludePatterns.some(pattern => pattern.test(context));
-        }
-
-
-        function getContext(content, match, matchIndex) {
-            const start = Math.max(0, matchIndex - 100);
-            const end = Math.min(content.length, matchIndex + match.length + 100);
-            return content.substring(start, end);
-        }
-
-
-        const htmlContent = document.documentElement.outerHTML;
-        apiKeyPatterns.forEach(({pattern, type, severity, validate}) => {
-            let match;
-            const globalPattern = new RegExp(pattern.source, 'gi');
-            
-            while ((match = globalPattern.exec(htmlContent)) !== null) {
-                const matchText = match[0];
-                const context = getContext(htmlContent, matchText, match.index);
-                
-        
-                if (shouldExclude(matchText, context)) {
-                    continue;
-                }
-                
-        
-                if (validate && !validate(matchText, context)) {
-                    continue;
-                }
-                
-                evidence.push({
-                    type: type,
-                    description: `Found ${type}: ${matchText.substring(0, 20)}...`,
-                    location: 'HTML Content',
-                    severity: severity,
-                    fullMatch: matchText,
-                    context: context.substring(0, 200)
-                });
-            }
-        });
-
-
-        try {
-            const storageKeys = Object.keys(localStorage);
-            storageKeys.forEach(key => {
-                const value = localStorage.getItem(key);
-                if (!value || value.length < 10) return; // Skip short values
-                
-                apiKeyPatterns.forEach(({pattern, type, severity, validate}) => {
-            
-                    [key, value].forEach((text, index) => {
-                        const match = text.match(pattern);
-                        if (match) {
-                            const matchText = match[0];
-                            const context = `${key}=${value}`;
-                            
-                            if (shouldExclude(matchText, context)) return;
-                            if (validate && !validate(matchText, context)) return;
-                            
-                            evidence.push({
-                                type: type,
-                                description: `Found ${type} in localStorage: ${key}`,
-                                location: 'localStorage',
-                                severity: severity,
-                                fullMatch: matchText
-                            });
-                        }
-                    });
-                });
-            });
-        } catch (e) {
-    
-        }
-
-
-        try {
-            const sessionKeys = Object.keys(sessionStorage);
-            sessionKeys.forEach(key => {
-                const value = sessionStorage.getItem(key);
-                if (!value || value.length < 10) return; // Skip short values
-                
-                apiKeyPatterns.forEach(({pattern, type, severity, validate}) => {
-                    [key, value].forEach((text, index) => {
-                        const match = text.match(pattern);
-                        if (match) {
-                            const matchText = match[0];
-                            const context = `${key}=${value}`;
-                            
-                            if (shouldExclude(matchText, context)) return;
-                            if (validate && !validate(matchText, context)) return;
-                            
-                            evidence.push({
-                                type: type,
-                                description: `Found ${type} in sessionStorage: ${key}`,
-                                location: 'sessionStorage',
-                                severity: severity,
-                                fullMatch: matchText
-                            });
-                        }
-                    });
-                });
-            });
-        } catch (e) {
-    
-        }
-
-
-        const scripts = document.querySelectorAll('script');
-        scripts.forEach((script, index) => {
-            if (!script.textContent || script.textContent.length < 50) return; // Skip very short scripts
-            
-            const scriptContent = script.textContent;
-            
-            apiKeyPatterns.forEach(({pattern, type, severity, validate}) => {
-                let match;
-                const globalPattern = new RegExp(pattern.source, 'gi');
-                
-                while ((match = globalPattern.exec(scriptContent)) !== null) {
-                    const matchText = match[0];
-                    const context = getContext(scriptContent, matchText, match.index);
-                    
-            
-                    if (/webpack|chunk|vendor|\.min\.|sourceMappingURL/.test(context)) {
-                        continue;
-                    }
-                    
-                    if (shouldExclude(matchText, context)) continue;
-                    if (validate && !validate(matchText, context)) continue;
-                    
-                    evidence.push({
-                        type: type,
-                        description: `Found ${type} in script tag`,
-                        location: `Script[${index}]`,
-                        severity: severity,
-                        element: script,
-                        fullMatch: matchText,
-                        context: context.substring(0, 200)
-                    });
-                }
-            });
-        });
-
-
-        const uniqueEvidence = [];
-        const seenKeys = new Set();
-        
-        evidence.forEach(item => {
-            const keyIdentifier = `${item.type}:${item.fullMatch}`;
-            if (!seenKeys.has(keyIdentifier)) {
-                seenKeys.add(keyIdentifier);
-                uniqueEvidence.push(item);
-            }
-        });
-
-        if (uniqueEvidence.length > 0) {
-            const highestSeverity = uniqueEvidence.reduce((max, item) => {
-                const severityOrder = { critical: 4, high: 3, medium: 2, low: 1 };
-                return severityOrder[item.severity] > severityOrder[max] ? item.severity : max;
-            }, 'low');
-
-            addIssue('api-keys-exposed', `${uniqueEvidence.length} potential API key(s) or sensitive data exposed`, highestSeverity, {
-                title: 'Exposed API Keys and Sensitive Data',
-                description: 'Potential API keys, tokens, or other sensitive data found in the page source.',
-                impact: 'Critical - Exposed credentials can lead to unauthorized access to external services',
-                solution: 'Remove all hardcoded credentials from client-side code and use environment variables or secure server-side storage',
-                evidence: uniqueEvidence
-            });
-        }
-
-        return uniqueEvidence;
-    }
 
     function checkAdvancedContentSecurityPolicy() {
         const evidence = [];
@@ -5481,14 +3617,14 @@
             if (script.textContent) {
                 const content = script.textContent;
                 
-                // More robust crypto detection - look for actual cryptographic usage patterns
+                
                 const weakCryptoPatterns = [
-                    // MD5 usage in crypto contexts
+                    
                     { 
                         pattern: /(?:crypto|hash|digest|encrypt|decrypt|md5|MD5)\s*[(\.].*?MD5|MD5.*?(?:hash|digest|encrypt|decrypt|create)/gi, 
                         issue: 'MD5 is cryptographically broken',
                         validate: (match) => {
-                            // Exclude common false positives
+                            
                             const lowerMatch = match.toLowerCase();
                             return !lowerMatch.includes('description') && 
                                    !lowerMatch.includes('desciption') &&
@@ -5497,19 +3633,19 @@
                                    !lowerMatch.includes('desktop');
                         }
                     },
-                    // SHA1 usage in crypto contexts
+                    
                     { 
                         pattern: /(?:crypto|hash|digest|encrypt|decrypt|sha1|SHA1)\s*[(\.].*?SHA1|SHA1.*?(?:hash|digest|encrypt|decrypt|create)/gi, 
                         issue: 'SHA1 is deprecated and weak',
                         validate: (match) => true
                     },
-                    // DES usage in crypto contexts - much more specific
+                    
                     { 
                         pattern: /(?:crypto|cipher|encrypt|decrypt|algorithm|DES)\s*[(\.].*?\bDES\b|\bDES\b.*?(?:cipher|encrypt|decrypt|algorithm|create)/gi, 
                         issue: 'DES encryption is too weak',
                         validate: (match) => {
                             const lowerMatch = match.toLowerCase();
-                            // Exclude very common false positives
+                            
                             const falsePositives = [
                                 'description', 'describe', 'described', 'describes', 'descriptor',
                                 'design', 'designer', 'designed', 'designs',
@@ -5526,13 +3662,13 @@
                             return !falsePositives.some(fp => lowerMatch.includes(fp));
                         }
                     },
-                    // RC4 usage in crypto contexts
+                    
                     { 
                         pattern: /(?:crypto|cipher|encrypt|decrypt|rc4|RC4)\s*[(\.].*?RC4|RC4.*?(?:cipher|encrypt|decrypt|create)/gi, 
                         issue: 'RC4 cipher is broken',
                         validate: (match) => true
                     },
-                    // Math.random in security contexts
+                    
                     { 
                         pattern: /Math\.random\s*\(\s*\).*?(?:key|secret|token|salt|iv|nonce|password|crypto)|(?:key|secret|token|salt|iv|nonce|password|crypto).*?Math\.random\s*\(\s*\)/gi, 
                         issue: 'Math.random() is not cryptographically secure for security purposes',
@@ -5543,7 +3679,7 @@
                 weakCryptoPatterns.forEach(({pattern, issue, validate}) => {
                     const matches = content.match(pattern);
                     if (matches) {
-                        // Additional validation for each match
+                        
                         const validMatches = matches.filter(match => validate(match));
                         if (validMatches.length > 0) {
                             evidence.push({
@@ -5551,19 +3687,19 @@
                                 description: issue,
                                 location: `Script[${index}]`,
                                 occurrences: validMatches.length,
-                                examples: validMatches.slice(0, 3) // Show first 3 examples
+                                examples: validMatches.slice(0, 3) 
                             });
                         }
                     }
                 });
 
-                // Hardcoded encryption keys - more specific patterns
+                
                 const keyPatterns = [
-                    // Look for actual key assignment patterns
+                    
                     /(?:(?:encryption|crypto|aes|des)[\w]*\s*[=:]\s*['"][a-zA-Z0-9+/]{16,}['"])|(?:key\s*[=:]\s*['"][a-zA-Z0-9+/]{24,}['"])/gi,
-                    // AES initialization with hardcoded keys
+                    
                     /AES\s*\(\s*['"][a-zA-Z0-9+/]{16,}['"]\s*\)/gi,
-                    // Crypto API usage with hardcoded values
+                    
                     /(?:createCipher|createDecipher|createHash)\s*\(\s*['"][^'"]{3,}['"]\s*,\s*['"][a-zA-Z0-9+/]{16,}['"]\s*\)/gi
                 ];
 
@@ -5575,7 +3711,7 @@
                             description: 'Encryption key or secret hardcoded in JavaScript',
                             location: `Script[${index}]`,
                             occurrences: matches.length,
-                            examples: matches.slice(0, 2) // Show first 2 examples
+                            examples: matches.slice(0, 2) 
                         });
                     }
                 });
@@ -5726,12 +3862,6 @@
 
     if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
         chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-            if (message.type === 'CHECK_API_KEYS') {
-                const apiKeys = checkAPIKeys();
-                sendResponse({ apiKeys: apiKeys });
-                return true;
-            }
-            
             if (message.type === 'CHECK_DYNAMIC_THREATS') {
         
                 checkAdvancedContentSecurityPolicy();
@@ -5767,19 +3897,9 @@
         try {
     
             const currentTime = Date.now();
-            if (currentTime - lastAPIKeyCheck > 30000) { // Check API keys every 30 seconds
-                logMessage('Running continuous API key check...', 'info');
-                checkAPIKeys();
-                lastAPIKeyCheck = currentTime;
-            }
-
     
             checkDynamicContentChanges();
-            
-    
             checkNewExternalResources();
-            
-    
             checkSuspiciousDOMChanges();
             
         } catch (error) {
@@ -5977,82 +4097,6 @@
         
         return context;
     }
-
-    async function testIncompleteChain() {
-
-        try {
-            const response = await fetch(location.origin, { method: 'HEAD' });
-            
-    
-            const indicators = {
-                missingHSTS: !response.headers.get('strict-transport-security'),
-                missingExpectCT: !response.headers.get('expect-ct'),
-                mobileUserAgent: navigator.userAgent.includes('Mobile')
-            };
-            
-    
-            if (indicators.missingHSTS && indicators.missingExpectCT && indicators.mobileUserAgent) {
-                return {
-                    hasIssue: true,
-                    description: 'Potential incomplete certificate chain (mobile devices may have connection issues)',
-                    impact: 'Mobile users may experience connection problems',
-                    solution: 'Ensure complete certificate chain is configured including intermediate certificates'
-                };
-            }
-            
-            return {
-                hasIssue: false,
-                description: 'Certificate chain appears complete',
-                impact: 'No impact',
-                solution: 'Continue monitoring'
-            };
-            
-        } catch (error) {
-            if (error.message.toLowerCase().includes('chain') ||
-                error.message.toLowerCase().includes('intermediate')) {
-                return {
-                    hasIssue: true,
-                    description: 'Certificate chain validation failed',
-                    impact: 'Some clients may not trust the certificate',
-                    solution: 'Install complete certificate chain including intermediates'
-                };
-            }
-            throw error;
-        }
-    }
-
-    async function testMixedCA() {
-
-        try {
-            const response = await fetch(location.origin, { method: 'HEAD' });
-            
-    
-            const serverHeader = response.headers.get('server');
-            const hstsHeader = response.headers.get('strict-transport-security');
-            
-    
-            if (serverHeader && hstsHeader) {
-        
-                return {
-                    hasIssue: false,
-                    description: 'Certificate authority practices appear consistent',
-                    impact: 'No impact',
-                    solution: 'Continue monitoring'
-                };
-            }
-            
-            return {
-                hasIssue: false,
-                description: 'No mixed CA indicators detected',
-                impact: 'No impact',
-                solution: 'Continue monitoring'
-            };
-            
-        } catch (error) {
-            throw error;
-        }
-    }
-
 
     function stopScanner() {
         try {
