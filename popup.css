@@ -576,7 +576,6 @@ body {
   align-items: center;
   gap: 5px;
   font-size: 12px;
-  font-family: var(--font-family);
   transition: var(--transition);
 }
 
