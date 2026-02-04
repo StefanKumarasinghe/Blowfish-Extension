@@ -22,7 +22,7 @@ class PopupManager {
         const elementIds = [
             'statusIndicator', 'statusText', 'domainInfo', 'scanButton', 'content',
             'resultsSummary', 'issuesList', 'noIssues', 'scanUrl',
-            'autoScanToggle', 'notificationsToggle', 'themeToggle', 'highlightToggle', 'hideBubbleToggle',
+            'autoScanToggle', 'notificationsToggle', 'highlightToggle', 'hideBubbleToggle',
             'addToWhitelistBtn', 'whitelistItems', 'noWhitelistItems', 'clearWhitelistBtn',
             'hardeningStatus', 'hardeningMegaBtn', 'hardeningMediumBtn',
             'hardeningLowBtn', 'hardeningOffBtn', 'hardeningInfo', 'hardeningInfoTitle',
@@ -53,16 +53,12 @@ class PopupManager {
 
             const settings = await chrome.storage.sync.get([
                 'autoScan', 'showNotifications', 'showHighlights', 'hideBubble',
-                'whitelist', 'hardeningLevel', 'theme'
+                'whitelist', 'hardeningLevel'
             ]);
 
             this.applySettings(settings);
             this.state.currentWhitelist = settings.whitelist || [];
             this.state.currentHardeningLevel = settings.hardeningLevel || 'off';
-
-            
-            const theme = settings.theme || 'dark';
-            this.applyTheme(theme);
 
             this.updateHardeningUI(this.state.currentHardeningLevel);
             this.displayWhitelist();
@@ -119,11 +115,6 @@ class PopupManager {
 
         if (this.elements.clearHighlightsBtn) {
             this.elements.clearHighlightsBtn.addEventListener('click', () => this.clearAllHighlights());
-        }
-
-        
-        if (this.elements.themeToggle) {
-            this.elements.themeToggle.addEventListener('click', () => this.toggleTheme());
         }
     }
 
