@@ -497,7 +497,7 @@ class PopupManager {
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `blowfish-report-${(new Date()).toISOString().replace(/[:.]/g,'-')}.json`;
+            a.download = `blowfish-report-${(new Date()).toISOString().replaceAll(/[:.]/g,'-')}.json`;
             a.click();
             URL.revokeObjectURL(url);
         } catch (error) {
@@ -948,8 +948,8 @@ class PopupManager {
         const percentage = Number.parseFloat(stats.safety_percentage) || 0;
         this.elements.meterFill.style.width = `${100 - percentage}%`;
         this.elements.meterPercentage.textContent = `${percentage}% Safe`;
-        this.elements.safeVotes.textContent = `👍 ${stats.safe_votes || 0}`;
-        this.elements.unsafeVotes.textContent = `👎 ${stats.unsafe_votes || 0}`;
+        this.elements.safeVotes.textContent = `${stats.safe_votes || 0}`;
+        this.elements.unsafeVotes.textContent = `${stats.unsafe_votes || 0}`;
 
         
         this.elements.communityConfidence.classList.remove('high', 'medium', 'low', 'no-data');
@@ -980,8 +980,8 @@ class PopupManager {
         this.elements.communityConfidence.classList.remove('high','medium','low');
         this.elements.communityConfidence.classList.add('no-data');
         this.elements.meterPercentage.textContent = '--';
-        this.elements.safeVotes.textContent = '👍 0';
-        this.elements.unsafeVotes.textContent = '👎 0';
+        this.elements.safeVotes.textContent = '0';
+        this.elements.unsafeVotes.textContent = '0';
         this.elements.meterFill.style.width = '0%';
         this.elements.meterFill.classList.remove('safe','warning','danger');
     }

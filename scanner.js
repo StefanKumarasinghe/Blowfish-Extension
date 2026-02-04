@@ -1,7 +1,6 @@
 (function() {
     'use strict';
     const issues = new Map();
-    let scanComplete = false;
     let reputationData = {};
     let vulnerabilityCount = 0;
 
@@ -257,7 +256,7 @@
             bubbleBadge.style.display = 'flex';
             
     
-            const severities = Array.from(issues.values()).map(issue => issue.severity);
+            const severities = Array.from(issues.values()).map(issue => (issue.severity || '').toString().toLowerCase());
             const hasCritical = severities.includes('critical');
             const hasHigh = severities.includes('high');
             const hasMedium = severities.includes('medium');
@@ -771,15 +770,6 @@
                 </div>
             `;
             
-            el.addEventListener('mouseenter', () => {
-                el.style.boxShadow = '0 8px 25px rgba(0,0,0,0.15)';
-                el.style.transform = 'translateY(-2px)';
-            });
-            el.addEventListener('mouseleave', () => {
-                el.style.boxShadow = 'none';
-                el.style.transform = 'translateY(0)';
-            });
-            
             el.addEventListener('click', () => showModal(key));
             content.appendChild(el);
         });
@@ -800,38 +790,6 @@
     modal.onclick = (e) => {
         if (e.target === modal) modal.style.display = 'none';
     };
-
-
-    let isDragging = false;
-    let dragOffsetX, dragOffsetY;
-
-    header.addEventListener('mousedown', e => {
-        isDragging = true;
-        dragOffsetX = e.clientX - container.getBoundingClientRect().left;
-        dragOffsetY = e.clientY - container.getBoundingClientRect().top;
-        container.style.transition = 'none';
-        e.preventDefault();
-    });
-
-    document.addEventListener('mouseup', () => {
-        if (isDragging) {
-            isDragging = false;
-            container.style.transition = 'all 0.3s ease';
-        }
-    });
-
-    document.addEventListener('mousemove', e => {
-        if (!isDragging) return;
-        let newRight = window.innerWidth - e.clientX - dragOffsetX;
-        let newBottom = window.innerHeight - e.clientY - dragOffsetY;
-
-        newRight = Math.min(Math.max(newRight, 10), window.innerWidth - container.offsetWidth - 10);
-        newBottom = Math.min(Math.max(newBottom, 10), window.innerHeight - container.offsetHeight - 10);
-
-        container.style.right = newRight + 'px';
-        container.style.bottom = newBottom + 'px';
-    });
-
 
     // THESE ARE THE DOMAIN REPUTATION CHECKS
 
@@ -1067,7 +1025,7 @@
                 }
             }
         } catch (e) {
-            console.log('WHOIS check failed:', e);
+            logMessage('WHOIS check failed: ' + e.message, 'warning');
         }
         
         return { service: 'WHOIS', status: 'unavailable' };
@@ -1124,7 +1082,7 @@
                 }
             }
         } catch (e) {
-            console.log('Domain API check failed:', e);
+            logMessage('Domain API check failed: ' + e.message, 'warning');
         }
         
         return { service: 'DNS Analysis', status: 'unavailable' };
@@ -1163,7 +1121,7 @@
                 };
             }
         } catch (e) {
-            console.log('IP location check failed:', e);
+            logMessage('IP location check failed: ' + e.message, 'warning');
         }
         
         return { service: 'IP Geolocation', status: 'unavailable' };
@@ -1340,11 +1298,10 @@
                         try {
                             const firstSeenTimestamp = result.data.first_seen_wayback.toString();
                             if (firstSeenTimestamp.length >= 8) {
-                                const firstSeenDate = new Date(
-                                    firstSeenTimestamp.substring(0, 4),  
-                                    parseInt(firstSeenTimestamp.substring(4, 6)) - 1,  
-                                    firstSeenTimestamp.substring(6, 8)   
-                                );
+                                const year = parseInt(firstSeenTimestamp.substring(0, 4));
+                                const month = parseInt(firstSeenTimestamp.substring(4, 6)) - 1;
+                                const day = parseInt(firstSeenTimestamp.substring(6, 8));
+                                const firstSeenDate = new Date(year, month, day);
                                 summary.domain_info.first_seen = firstSeenDate.toLocaleDateString();
                             } else {
                                 summary.domain_info.first_seen = result.data.first_seen_wayback;
@@ -1412,7 +1369,6 @@
         }
         
     
-        const riskRatio = summary.risk_indicators / Math.max(summary.available_services, 1);
         const adjustedRiskScore = summary.risk_indicators;
         
     
@@ -1443,7 +1399,7 @@
         if (firstSeen && firstSeen !== creationDate) {
             const firstSeenDate = new Date(
                 firstSeen.substring(0, 4),
-                parseInt(firstSeen.substring(4, 6)) - 1,
+                Number.parseInt(firstSeen.substring(4, 6)) - 1,
                 firstSeen.substring(6, 8)
             );
             summary.details.push(`First archived: ${firstSeenDate.toLocaleDateString()}`);
@@ -1467,16 +1423,12 @@
 
 
     setTimeout(() => {
-
-        bubble.innerHTML = '⚡<br><span style="font-size: 10px; margin-top: 4px;">READY</span>';
-        
-
+        bubble.innerHTML = '⚡<br><span style="font-size: 10px; margin-top: 4px;"></span>';
         setTimeout(runComprehensiveScan, 500);
     }, 1500);
 
-    // END OF DOMAIN REPUTATION CHECKS
 
-    // START OF OTHER CHECKS
+    // THE COMPREHENSIVE SCAN FUNCTION
 
     async function runComprehensiveScan() {
         try {
@@ -1554,9 +1506,7 @@
             
             
             const coreChecks = [
-                checkProtocolSecurity,
-                checkSecurityHeaders,
-                checkMixedContent
+                checkSecurityHeaders
             ];
             
             for (let i = 0; i < coreChecks.length; i++) {
@@ -1588,15 +1538,7 @@
             const advancedChecks = [
                 checkAdvancedContentSecurityPolicy,
                 checkInjectionVulnerabilities,
-                checkCryptographicImplementation,
-                checkPrivacyLeaks,
-                checkResourceIntegrity,
-                checkCertificateTransparency,
-                checkHSTSPreload,
-                checkCookieSecurity,
-                checkCORSConfiguration,
-                checkFormSecurity,
-                checkPasswordSecurity
+                checkCryptographicImplementation
             ];
             
             
@@ -1626,16 +1568,7 @@
             
             const clientSideChecks = [
                 checkDOMVulnerabilities,
-                checkClientSideVulnerabilities,
-                checkWebSocketSecurity,
-                checkBrowserExtensions,
-                checkBrowserFingerprinting,
-                checkWebAPISecurity,
-                checkModernSecurityFeatures,
-                checkThirdPartyResources,
-                checkDNSRebindingProtection,
-                checkAdvancedSecurity,
-                checkDeprecatedFeatures
+                checkBrowserFingerprinting
             ];
             
         
@@ -1658,7 +1591,7 @@
             
             clearInterval(progressMonitor);
             
-            window.dispatchEvent(new CustomEvent('securityScanProgress', {
+            globalThis.window.dispatchEvent(new CustomEvent('securityScanProgress', {
                 detail: {
                     currentCheck: 'Finalizing scan results...',
                     vulnerabilityCount: vulnerabilityCount,
@@ -1666,7 +1599,6 @@
                 }
             }));
             
-            scanComplete = true;
             const scanDuration = Date.now() - scanStartTime;
             
             logMessage(`Comprehensive scan completed in ${(scanDuration / 1000).toFixed(2)}s. Found ${vulnerabilityCount} issues`, 'info');
@@ -1674,7 +1606,7 @@
             updateBubbleBadge();
             
             const scanResults = {
-                url: window.location.href,
+                url: globalThis.window.location.href,
                 vulnerabilityCount: vulnerabilityCount,
                 issues: Array.from(issues.entries()).map(([key, issue]) => ({
                     key: key,
@@ -1695,7 +1627,7 @@
             
             logMessage('Dispatching scan complete event', 'info');
             
-            window.dispatchEvent(new CustomEvent('securityScanComplete', {
+            globalThis.window.dispatchEvent(new CustomEvent('securityScanComplete', {
                 detail: scanResults
             }));
             
@@ -1723,167 +1655,6 @@
             logMessage(`Comprehensive scan failed: ${error.message}`, 'error');
             handleScanError(error);
         }
-    }
-    
-    
-    function checkMixedContent() {
-        const evidence = [];
-        const httpResources = document.querySelectorAll('img[src^="http:"], script[src^="http:"], link[href^="http:"], iframe[src^="http:"]');
-        
-        if (httpResources.length > 0 && location.protocol === 'https:') {
-            httpResources.forEach((resource, index) => {
-                evidence.push({
-                    type: 'Mixed Content',
-                    description: `${resource.tagName.toLowerCase()} loaded over HTTP`,
-                    code: resource.outerHTML,
-                    location: `${resource.tagName}[${index}]`
-                });
-            });
-            
-            addIssue('mixed-content', `${httpResources.length} mixed content resources detected`, 'high', {
-                title: 'Mixed Content Vulnerability',
-                description: 'HTTPS page loading HTTP resources compromises security.',
-                impact: 'High - Allows man-in-the-middle attacks on resources',
-                solution: 'Update all resource URLs to use HTTPS',
-                evidence: evidence,
-                references: [
-                    {
-                        title: 'Mixed Content - MDN',
-                        url: 'https://developer.mozilla.org/en-US/docs/Web/Security/Mixed_content'
-                    }
-                ]
-            });
-        }
-    }
-    
-    function checkCertificateTransparency() {
-
-        fetch(location.origin, { method: 'HEAD' })
-            .then(response => {
-                const ctHeader = response.headers.get('expect-ct');
-                if (!ctHeader) {
-                    addIssue('no-certificate-transparency', 'Certificate Transparency not enforced', 'low', {
-                        title: 'Missing Certificate Transparency',
-                        description: 'Site does not enforce Certificate Transparency monitoring.',
-                        impact: 'Low - Reduced protection against rogue certificates',
-                        solution: 'Implement Expect-CT header',
-                        evidence: [{
-                            type: 'Missing Header',
-                            description: 'Expect-CT header not present',
-                            location: 'HTTP Response Headers'
-                        }]
-                    });
-                }
-            })
-            .catch(() => {});
-    }
-    
-    function checkHSTSPreload() {
-        fetch(location.origin, { method: 'HEAD' })
-            .then(response => {
-                const hstsHeader = response.headers.get('strict-transport-security');
-                if (hstsHeader) {
-                    if (!hstsHeader.includes('preload')) {
-                        addIssue('hsts-no-preload', 'HSTS preload not enabled', 'medium', {
-                            title: 'HSTS Preload Missing',
-                            description: 'HSTS header present but preload not enabled.',
-                            impact: 'Medium - First visit vulnerable to downgrade attacks',
-                            solution: 'Add preload directive to HSTS header and submit to preload list',
-                            evidence: [{
-                                type: 'HSTS Header',
-                                description: `Current header: ${hstsHeader}`,
-                                location: 'HTTP Response Headers'
-                            }]
-                        });
-                    }
-                }
-            })
-            .catch(() => {});
-    }
-    
-    function checkCookieSecurity() {
-        const evidence = [];
-        const cookies = document.cookie.split(';');
-        
-        if (cookies.length > 0 && cookies[0] !== '') {
-            cookies.forEach((cookie, index) => {
-                const cookieName = cookie.trim().split('=')[0];
-                
-        
-                if (location.protocol === 'https:' && !cookie.includes('Secure')) {
-                    evidence.push({
-                        type: 'Insecure Cookie',
-                        description: `Cookie "${cookieName}" missing Secure flag`,
-                        location: `Cookie[${index}]`
-                    });
-                }
-                
-        
-                if (!cookie.includes('HttpOnly')) {
-                    evidence.push({
-                        type: 'Accessible Cookie',
-                        description: `Cookie "${cookieName}" missing HttpOnly flag`,
-                        location: `Cookie[${index}]`
-                    });
-                }
-                
-        
-                if (!cookie.includes('SameSite')) {
-                    evidence.push({
-                        type: 'CSRF Vulnerable Cookie',
-                        description: `Cookie "${cookieName}" missing SameSite attribute`,
-                        location: `Cookie[${index}]`
-                    });
-                }
-            });
-            
-            if (evidence.length > 0) {
-                addIssue('cookie-security', `${evidence.length} cookie security issues`, 'medium', {
-                    title: 'Cookie Security Issues',
-                    description: 'Cookies missing important security attributes.',
-                    impact: 'Medium - Cookies vulnerable to theft or CSRF attacks',
-                    solution: 'Add Secure, HttpOnly, and SameSite attributes to all cookies',
-                    evidence: evidence
-                });
-            }
-        }
-    }
-    
-    function checkCORSConfiguration() {
-        const evidence = [];
-        
-        fetch(location.origin, { method: 'OPTIONS' })
-            .then(response => {
-                const corsHeaders = [
-                    'access-control-allow-origin',
-                    'access-control-allow-credentials',
-                    'access-control-allow-methods',
-                    'access-control-allow-headers'
-                ];
-                
-                corsHeaders.forEach(header => {
-                    const value = response.headers.get(header);
-                    if (value) {
-                        evidence.push({
-                            type: 'CORS Header',
-                            description: `${header}: ${value}`,
-                            location: 'HTTP Response Headers'
-                        });
-                        
-                
-                        if (header === 'access-control-allow-origin' && value === '*') {
-                            addIssue('permissive-cors', 'Overly permissive CORS policy', 'high', {
-                                title: 'Permissive CORS Configuration',
-                                description: 'CORS allows all origins (*) which can be dangerous.',
-                                impact: 'High - Allows any website to make requests',
-                                solution: 'Restrict CORS to specific trusted domains',
-                                evidence: evidence
-                            });
-                        }
-                    }
-                });
-            })
-            .catch(() => {});
     }
     
     function checkDOMVulnerabilities() {
@@ -1946,430 +1717,49 @@
         }
     }
     
-    function checkClientSideVulnerabilities() {
-        const evidence = [];
-        
-
-        try {
-            if (localStorage.length > 0) {
-                evidence.push({
-                    type: 'Local Storage',
-                    description: `${localStorage.length} items in localStorage`,
-                    location: 'Browser Storage'
-                });
-            }
-            
-            if (sessionStorage.length > 0) {
-                evidence.push({
-                    type: 'Session Storage',
-                    description: `${sessionStorage.length} items in sessionStorage`,
-                    location: 'Browser Storage'
-                });
-            }
-            
-    
-            const sensitivePatterns = [/password/i, /token/i, /secret/i, /key/i, /auth/i];
-            
-            for (let i = 0; i < localStorage.length; i++) {
-                const key = localStorage.key(i);
-                const value = localStorage.getItem(key);
-                
-                sensitivePatterns.forEach(pattern => {
-                    if (pattern.test(key) || pattern.test(value)) {
-                        evidence.push({
-                            type: 'Sensitive Data in Storage',
-                            description: `Potential sensitive data in localStorage: ${key}`,
-                            location: 'localStorage'
-                        });
-                    }
-                });
-            }
-            
-        } catch (e) {
-    
-        }
-        
-
-        if (window.RTCPeerConnection || window.webkitRTCPeerConnection || window.mozRTCPeerConnection) {
-            evidence.push({
-                type: 'WebRTC Available',
-                description: 'WebRTC may leak local IP addresses',
-                location: 'Browser APIs'
-            });
-        }
-        
-        if (evidence.length > 0) {
-            addIssue('client-side-risks', 'Client-side security risks detected', 'low', {
-                title: 'Client-Side Security Risks',
-                description: 'Various client-side security concerns identified.',
-                impact: 'Low to Medium - Depends on data sensitivity',
-                solution: 'Review storage usage and implement proper data protection',
-                evidence: evidence
-            });
-        }
-    }
-    
     function checkBrowserFingerprinting() {
         const evidence = [];
-        
+        const scriptNodes = Array.from(document.scripts || []);
+        const usagePatterns = [/toDataURL\s*\(/i, /getImageData\s*\(/i, /FingerprintJS/i, /fingerprintjs/i, /\bfingerprint\b/i];
 
-        const fingerprintingAPIs = [
-            'navigator.plugins',
-            'navigator.mimeTypes',
-            'screen.width',
-            'screen.height',
-            'navigator.language',
-            'navigator.languages',
-            'navigator.platform',
-            'navigator.hardwareConcurrency'
-        ];
-        
-
-        try {
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
+        scriptNodes.forEach((script, index) => {
+            const content = (script.textContent || '').trim();
+            if (!content) return;
+            if (usagePatterns.some(p => p.test(content))) {
                 evidence.push({
-                    type: 'Canvas Fingerprinting',
-                    description: 'Canvas API available for fingerprinting',
-                    location: 'Browser APIs'
+                    type: 'Fingerprinting Script',
+                    description: 'Script appears to use fingerprinting APIs or libraries',
+                    code: content.substring(0, 300) + (content.length > 300 ? '...' : ''),
+                    location: `script[${index}]`
                 });
             }
-        } catch (e) {}
-        
+        });
 
-        try {
-            const gl = document.createElement('canvas').getContext('webgl');
-            if (gl) {
+        const inlineHandlers = Array.from(document.querySelectorAll('[onload],[onerror],[onmouseenter],[onmousemove]'));
+        inlineHandlers.forEach((el, idx) => {
+            const moved = (el.getAttribute('onload') || '') + ' ' + (el.getAttribute('onerror') || '') + ' ' + (el.getAttribute('onmouseenter') || '') + ' ' + (el.getAttribute('onmousemove') || '');
+            if (usagePatterns.some(p => p.test(moved))) {
                 evidence.push({
-                    type: 'WebGL Fingerprinting',
-                    description: 'WebGL available for fingerprinting',
-                    location: 'Browser APIs'
+                    type: 'Inline Fingerprinting',
+                    description: 'Inline handler references fingerprinting APIs',
+                    code: moved.substring(0, 200) + (moved.length > 200 ? '...' : ''),
+                    location: `element[${idx}]`
                 });
             }
-        } catch (e) {}
-        
+        });
 
-        if (window.AudioContext || window.webkitAudioContext) {
-            evidence.push({
-                type: 'Audio Fingerprinting',
-                description: 'Audio API available for fingerprinting',
-                location: 'Browser APIs'
-            });
-        }
-        
         if (evidence.length > 0) {
-            addIssue('fingerprinting-risk', 'Browser fingerprinting possible', 'low', {
-                title: 'Browser Fingerprinting Risk',
-                description: 'Multiple APIs available for browser fingerprinting.',
-                impact: 'Low - Privacy concerns, user tracking possible',
-                solution: 'Consider implementing fingerprinting protection',
-                evidence: evidence
-            });
-        }
-    }
-    
-    function checkPasswordSecurity() {
-        const evidence = [];
-        const passwordFields = document.querySelectorAll('input[type="password"]');
-        
-        passwordFields.forEach((field, index) => {
-            const form = field.closest('form');
-            
-    
-            if (field.getAttribute('autocomplete') === 'off') {
-                evidence.push({
-                    type: 'Password Manager Blocked',
-                    description: 'Password field blocks password managers',
-                    code: field.outerHTML,
-                    location: `Password field[${index}]`
-                });
-            }
-            
-    
-            if (form && (!form.action || form.action === location.href)) {
-                evidence.push({
-                    type: 'Weak Form Action',
-                    description: 'Form submits to same page or no action specified',
-                    location: `Form containing password field[${index}]`
-                });
-            }
-            
-    
-            const parentForm = field.closest('form') || field.parentElement;
-            const toggleButton = parentForm.querySelector('[type="button"]');
-            if (!toggleButton) {
-                evidence.push({
-                    type: 'No Password Toggle',
-                    description: 'No password visibility toggle found',
-                    location: `Password field[${index}]`
-                });
-            }
-        });
-        
-        if (evidence.length > 0) {
-            addIssue('password-security', 'Password security issues detected', 'medium', {
-                title: 'Password Security Issues',
-                description: 'Password fields have security or usability issues.',
-                impact: 'Medium - Affects password security and user experience',
-                solution: 'Implement proper password field security practices',
-                evidence: evidence
-            });
-        }
-    }
-
-    function checkFormSecurity() {
-        const evidence = [];
-        const forms = document.querySelectorAll('form');
-        
-        forms.forEach((form, index) => {
-    
-            const csrfToken = form.querySelector('input[name*="csrf"], input[name*="token"], input[name="_token"]');
-            if (!csrfToken) {
-                evidence.push({
-                    type: 'Missing CSRF Protection',
-                    description: 'Form lacks CSRF token protection',
-                    code: form.outerHTML.substring(0, 200) + '...',
-                    location: `Form[${index}]`
-                });
-            }
-            
-    
-            if (form.method.toLowerCase() === 'get') {
-                const sensitiveInputs = form.querySelectorAll('input[type="password"], input[name*="pass"], input[name*="secret"]');
-                if (sensitiveInputs.length > 0) {
-                    evidence.push({
-                        type: 'Sensitive Data via GET',
-                        description: 'Sensitive form data sent via GET method',
-                        location: `Form[${index}]`
-                    });
-                }
-            }
-            
-    
-            const textInputs = form.querySelectorAll('input[type="text"], input[type="email"], textarea');
-            textInputs.forEach((input, inputIndex) => {
-                if (!input.hasAttribute('maxlength') && !input.hasAttribute('pattern')) {
-                    evidence.push({
-                        type: 'No Input Validation',
-                        description: 'Input field lacks client-side validation',
-                        location: `Form[${index}] Input[${inputIndex}]`
-                    });
-                }
-            });
-        });
-        
-        if (evidence.length > 0) {
-            addIssue('form-security', 'Form security issues detected', 'medium', {
-                title: 'Form Security Issues',
-                description: 'Forms missing important security measures.',
-                impact: 'Medium - Forms vulnerable to various attacks',
-                solution: 'Implement CSRF protection, proper methods, and validation',
-                evidence: evidence
-            });
-        }
-    }
-    
-    function checkWebSocketSecurity() {
-        const evidence = [];
-        
-
-        const scripts = document.querySelectorAll('script');
-        scripts.forEach((script, index) => {
-            if (script.textContent.includes('WebSocket') || script.textContent.includes('ws://') || script.textContent.includes('wss://')) {
-        
-                if (script.textContent.includes('ws://')) {
-                    evidence.push({
-                        type: 'Insecure WebSocket',
-                        description: 'WebSocket connection over unencrypted protocol',
-                        code: script.textContent.substring(0, 200) + '...',
-                        location: `Script[${index}]`
-                    });
-                }
-                
-        
-                if (script.textContent.includes('wss://')) {
-                    evidence.push({
-                        type: 'Secure WebSocket',
-                        description: 'WebSocket connection over encrypted protocol',
-                        location: `Script[${index}]`
-                    });
-                }
-            }
-        });
-        
-        if (evidence.some(e => e.type === 'Insecure WebSocket')) {
-            addIssue('insecure-websocket', 'Insecure WebSocket connections detected', 'high', {
-                title: 'Insecure WebSocket Protocol',
-                description: 'WebSocket connections using unencrypted ws:// protocol detected',
-                impact: 'High - WebSocket traffic can be intercepted',
-                solution: 'Use wss:// for secure WebSocket connections',
-                evidence: evidence.filter(e => e.type === 'Insecure WebSocket')
-            });
-        }
-    }
-    
-    async function checkDNSRebindingProtection() {
-        const evidence = [];
-        const hostname = location.hostname;
-        
-
-        const privateIPPatterns = [
-            /^10\./,
-            /^172\.(1[6-9]|2[0-9]|3[0-1])\./,
-            /^192\.168\./,
-            /^127\./,
-            /^169\.254\./,
-            /^::1$/,
-            /^fc00:/,
-            /^fe80:/
-        ];
-        
-        const isPrivateIP = privateIPPatterns.some(pattern => pattern.test(hostname));
-        
-        if (isPrivateIP) {
-            evidence.push({
-                type: 'Private IP Access',
-                description: `Site accessed via private IP: ${hostname}`,
-                location: 'URL'
-            });
-            
-            addIssue('dns-rebinding-risk', 'DNS rebinding attack risk', 'medium', {
-                title: 'DNS Rebinding Attack Risk',
-                description: 'Site accessible via private IP address.',
-                impact: 'Medium - Potential for DNS rebinding attacks',
-                solution: 'Implement Host header validation and use public domains',
-                evidence: evidence
-            });
-        }
-        
-
-        if (hostname === 'localhost' || hostname === '127.0.0.1') {
-            addIssue('localhost-access', 'Localhost development environment', 'low', {
-                title: 'Development Environment Detected',
-                description: 'Site running on localhost development environment.',
-                impact: 'Low - Development environment security concerns',
-                solution: 'Ensure proper security measures before production deployment',
-                evidence: [{
-                    type: 'Localhost Access',
-                    description: `Accessed via: ${hostname}`,
-                    location: 'URL'
-                }]
-            });
-        }
-    }
-    
-    function checkDeprecatedFeatures() {
-        const evidence = [];
-        
-
-        const deprecatedElements = document.querySelectorAll('font, center, marquee, blink, applet, embed[type="application/x-shockwave-flash"]');
-        deprecatedElements.forEach((element, index) => {
-    
-            let selector = '';
-            if (element.id) {
-                selector = `#${element.id}`;
-            } else if (element.className) {
-                selector = `${element.tagName.toLowerCase()}.${element.className.split(' ')[0]}`;
-            } else {
-                selector = element.tagName.toLowerCase();
-            }
-            
-            evidence.push({
-                type: 'Deprecated HTML',
-                description: `Deprecated ${element.tagName.toLowerCase()} element found`,
-                code: element.outerHTML,
-                location: `Element[${index}]`,
-                selector: selector,
-                element: element
-            });
-        });
-        
-
-        const scripts = document.querySelectorAll('script');
-        scripts.forEach((script, index) => {
-            const content = script.textContent;
-            
-    
-            const deprecatedMethods = [
-                'document.write',
-                'escape(',
-                'unescape(',
-                'with(',
-                '__defineGetter__',
-                '__defineSetter__'
-            ];
-            
-            deprecatedMethods.forEach(method => {
-                if (content.includes(method)) {
-                    evidence.push({
-                        type: 'Deprecated JavaScript',
-                        description: `Deprecated method ${method} found`,
-                        location: `Script[${index}]`
-                    });
-                }
-            });
-        });
-        
-        if (evidence.length > 0) {
-            addIssue('deprecated-features', 'Deprecated features detected', 'low', {
-                title: 'Deprecated Features in Use',
-                description: 'Site uses deprecated HTML elements or JavaScript methods.',
-                impact: 'Low - May cause compatibility issues or security risks',
-                solution: 'Update to modern web standards and practices',
-                evidence: evidence
-            });
-        }
-    }
-
-    function checkProtocolSecurity() {
-        const evidence = [];
-        
-        if (location.protocol !== 'https:') {
-            evidence.push({
-                type: 'Protocol Check',
-                description: `Site served over ${location.protocol}`,
-                location: location.href
-            });
-            
-            addIssue('insecure-protocol', 'Site not using HTTPS', 'critical', {
-                title: 'Insecure HTTP Protocol',
-                description: 'Site is served over HTTP instead of HTTPS, making all data transmission vulnerable to interception.',
-                impact: 'Critical - All data can be intercepted and modified in transit',
-                solution: 'Implement HTTPS with a valid SSL/TLS certificate',
+            addIssue('fingerprinting-risk', 'Browser fingerprinting detected', 'medium', {
+                title: 'Browser Fingerprinting Detected',
+                description: 'Scripts on this page appear to be using fingerprinting techniques.',
+                impact: 'Medium - Tracking and privacy concerns',
+                solution: 'Review and remove fingerprinting libraries or obtain user consent where appropriate',
                 evidence: evidence,
                 references: [
-                    {
-                        title: 'Why HTTPS Matters - Google',
-                        url: 'https://developers.google.com/web/fundamentals/security/encrypt-in-transit/why-https'
-                    }
+                    { title: 'Fingerprinting - EFF', url: 'https://privacybadger.org' }
                 ]
             });
         }
-        
-
-        const forms = document.querySelectorAll('form');
-        forms.forEach((form, index) => {
-            const passwordFields = form.querySelectorAll('input[type="password"]');
-            if (passwordFields.length > 0) {
-                if (location.protocol !== 'https:') {
-                    evidence.push({
-                        type: 'Password Form',
-                        description: 'Password form over insecure connection',
-                        code: form.outerHTML.substring(0, 200) + '...',
-                        location: `form[${index}]`
-                    });
-                    
-                    addIssue('password-over-http', 'Password form over insecure connection', 'critical', {
-                        title: 'Password Form Over HTTP',
-                        description: 'Password forms served over HTTP expose credentials to interception.',
-                        impact: 'Critical - User credentials can be stolen during transmission',
-                        solution: 'Serve all authentication pages over HTTPS',
-                        evidence: evidence
-                    });
-                }
-            }
-        });
     }
 
     async function checkSecurityHeaders() {
@@ -2445,273 +1835,38 @@
         }
     }
 
-    function checkBrowserExtensions() {
-        try {
-    
-            const extensionIndicators = [];
-            
-            if (window.chrome && window.chrome.runtime) {
-                extensionIndicators.push('Chrome Extension API detected');
-            }
-            
-            if (window.browser && window.browser.runtime) {
-                extensionIndicators.push('WebExtension API detected');
-            }
-
-    
-            const originalProperties = ['fetch', 'XMLHttpRequest', 'addEventListener'];
-            originalProperties.forEach(prop => {
-                if (window[prop] && window[prop].toString().includes('native code') === false) {
-                    extensionIndicators.push(`Modified ${prop} detected`);
-                }
-            });
-
-    
-            if (typeof window.uBlock !== 'undefined' || typeof window.adblockplusInjected !== 'undefined') {
-                extensionIndicators.push('Ad-blocker extension detected');
-            }
-
-            if (extensionIndicators.length > 0) {
-                addIssue('browser-extensions', 'Browser extensions detected', 'low', {
-                    title: 'Browser Extensions Active',
-                    description: 'Browser extensions may modify page behavior and security context.',
-                    impact: 'Low - Extensions may intercept or modify requests',
-                    solution: 'Be aware that extensions can modify page behavior and data',
-                    evidence: extensionIndicators.map(indicator => ({
-                        type: 'Extension Detection',
-                        description: indicator
-                    }))
-                });
-            }
-        } catch (error) {
-            console.log('Extension check failed:', error);
-        }
-    }
-
-    function checkWebAPISecurity() {
-        const evidence = [];
-        
-
-        const dangerousAPIs = [
-            'geolocation', 'camera', 'microphone', 'notifications', 
-            'persistent-storage', 'midi', 'background-sync'
-        ];
-
-        if (navigator.permissions) {
-            dangerousAPIs.forEach(async (api) => {
-                try {
-                    const permission = await navigator.permissions.query({name: api});
-                    if (permission.state === 'granted') {
-                        evidence.push({
-                            type: 'Granted Permission',
-                            description: `${api} permission is granted`,
-                            location: 'Browser Permissions'
-                        });
-                    }
-                } catch (e) {
-            
-                }
-            });
-        }
-
-
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.getRegistrations().then(registrations => {
-                if (registrations.length > 0) {
-                    evidence.push({
-                        type: 'Service Worker',
-                        description: `${registrations.length} service worker(s) registered`,
-                        location: 'Browser Service Workers'
-                    });
-                    
-                    addIssue('service-workers', 'Service workers detected', 'low', {
-                        title: 'Active Service Workers',
-                        description: 'Service workers can intercept network requests and cache data.',
-                        impact: 'Low - May intercept and modify network traffic',
-                        solution: 'Review service worker code for security implications',
-                        evidence: evidence
-                    });
-                }
-            });
-        }
-    }
-
-    function checkModernSecurityFeatures() {
-        const evidence = [];
-        const scriptsWithSRI = document.querySelectorAll('script[integrity]');
-        const externalScripts = document.querySelectorAll('script[src]:not([integrity])');
-        c
-        if (externalScripts.length > 0 && scriptsWithSRI.length === 0) {
-            evidence.push({
-                type: 'Missing SRI',
-                description: `${externalScripts.length} external scripts without integrity checks`,
-                location: 'External Scripts'
-            });
-        }
-
-
-        const securityMetas = document.querySelectorAll('meta[http-equiv]');
-        securityMetas.forEach(meta => {
-            const equiv = meta.getAttribute('http-equiv').toLowerCase();
-            if (['content-security-policy', 'x-frame-options', 'x-content-type-options'].includes(equiv)) {
-                evidence.push({
-                    type: 'Security Meta Tag',
-                    description: `${equiv} defined in meta tag`,
-                    code: meta.outerHTML,
-                    location: 'HTML Head'
-                });
-            }
-        });
-
-        if (evidence.length > 0) {
-            addIssue('modern-security', 'Modern security features analysis', 'info', {
-                title: 'Modern Security Features',
-                description: 'Analysis of modern web security features implementation.',
-                impact: 'Info - Security feature audit results',
-                solution: 'Review and implement missing security features',
-                evidence: evidence
-            });
-        }
-    }
-
-    function checkThirdPartyResources() {
-        const evidence = [];
-        const currentDomain = location.hostname;
-        
-
-        const externalScripts = document.querySelectorAll('script[src]');
-        const externalDomains = new Set();
-        
-        externalScripts.forEach((script, index) => {
-            try {
-                const url = new URL(script.src);
-                if (url.hostname !== currentDomain) {
-                    externalDomains.add(url.hostname);
-                    evidence.push({
-                        type: 'External Script',
-                        description: `Script loaded from ${url.hostname}`,
-                        code: script.outerHTML,
-                        location: `script[${index}]`
-                    });
-                }
-            } catch (e) {
-        
-            }
-        });
-
-
-        const externalStyles = document.querySelectorAll('link[rel="stylesheet"][href]');
-        externalStyles.forEach((link, index) => {
-            try {
-                const url = new URL(link.href);
-                if (url.hostname !== currentDomain) {
-                    externalDomains.add(url.hostname);
-                    evidence.push({
-                        type: 'External Stylesheet',
-                        description: `Stylesheet loaded from ${url.hostname}`,
-                        code: link.outerHTML,
-                        location: `link[${index}]`
-                    });
-                }
-            } catch (e) {
-        
-            }
-        });
-
-        if (externalDomains.size > 0) {
-            addIssue('third-party-resources', `Resources loaded from ${externalDomains.size} external domains`, 'low', {
-                title: 'Third-Party Resources',
-                description: 'External resources can introduce security and privacy risks.',
-                impact: 'Low to Medium - Depends on trust level of external domains',
-                solution: 'Review all external resources and implement SRI where possible',
-                evidence: evidence,
-                references: [
-                    {
-                        title: 'Subresource Integrity - MDN',
-                        url: 'https://developer.mozilla.org/en-US/docs/Web/Security/Subresource_Integrity'
-                    }
-                ]
-            });
-        }
-    }
-
-    function checkAdvancedSecurity() {
-        const evidence = [];
-        
-
-        const metaCsp = document.querySelector('meta[http-equiv="Content-Security-Policy"]');
-        if (metaCsp) {
-            evidence.push({
-                type: 'Meta CSP Found',
-                description: 'CSP defined in meta tag',
-                code: metaCsp.outerHTML,
-                location: 'HTML Head'
-            });
-        }
-
-
-        const iframes = document.querySelectorAll('iframe');
-        iframes.forEach((iframe, index) => {
-            if (!iframe.hasAttribute('sandbox')) {
-                evidence.push({
-                    type: 'Unsandboxed iframe',
-                    description: `iframe ${index + 1} lacks sandbox attribute`,
-                    code: iframe.outerHTML,
-                    location: `iframe[${index}]`
-                });
-            }
-        });
-
-        if (evidence.length > 0) {
-            addIssue('iframe-security', 'iframe security issues detected', 'medium', {
-                title: 'iframe Security Configuration',
-                description: 'iframes without proper security attributes can pose risks.',
-                impact: 'Medium - Potential for malicious content injection',
-                solution: 'Add sandbox attributes to restrict iframe capabilities',
-                evidence: evidence
-            });
-        }
-    }
-
-
     let scannerSettings = {
         hideBubble: false,
         showHighlights: true
     };
 
 
-    window.addEventListener('updateScannerSettings', (event) => {
+    globalThis.window.addEventListener('updateScannerSettings', (event) => {
         if (event.detail) {
-            const oldSettings = { ...scannerSettings };
             scannerSettings = { ...scannerSettings, ...event.detail };
-            
-            console.log('Scanner settings updated:', scannerSettings);
-            console.log('Previous settings:', oldSettings);
-            
+            logMessage('Scanner settings updated', 'info');
             applySettings();
         }
     });
 
 
     function applySettings() {
-        console.log('Applying scanner settings:', scannerSettings);
-        console.log('Bubble element exists:', !!bubble);
-        console.log('Bubble style exists:', !!(bubble && bubble.style));
+        logMessage('Applying scanner settings', 'info');
         
 
         if (scannerSettings.hideBubble) {
-            if (bubble && bubble.style) {
+            if (bubble?.style) {
                 bubble.style.display = 'none';
-                console.log('Scanner bubble hidden successfully');
+                logMessage('Scanner bubble hidden successfully', 'info');
             } else {
-                console.log('Cannot hide bubble - element not ready yet');
+                logMessage('Cannot hide bubble - element not ready yet', 'warning');
             }
         } else {
-            if (bubble && bubble.style) {
+            if (bubble?.style) {
                 bubble.style.display = 'flex';
-                console.log('Scanner bubble shown successfully');
+                logMessage('Scanner bubble shown successfully', 'info');
             } else {
-                console.log('Cannot show bubble - element not ready yet');
+                logMessage('Cannot show bubble - element not ready yet', 'warning');
             }
         }
     }
@@ -2726,17 +1881,17 @@
     function initializeScanner() {
         try {
             
-            if (window.securityScannerInitialized) {
+            if (globalThis.window.securityScannerInitialized) {
                 logMessage('Scanner already initialized, skipping duplicate initialization', 'info');
                 return;
             }
             
             logMessage('Initializing Security Scanner Pro...', 'info');
-            window.securityScannerInitialized = true;
+            globalThis.window.securityScannerInitialized = true;
             
             
             checkWhitelistStatus().then(isWhitelisted => {
-                if (isWhitelisted && !window.manualScanTriggered) {
+                if (isWhitelisted && !globalThis.window.manualScanTriggered) {
                     logMessage('Site is whitelisted, skipping auto-scan', 'info');
                     return;
                 }
@@ -2758,9 +1913,7 @@
     
     async function checkWhitelistStatus() {
         try {
-            const hostname = window.location.hostname;
-            
-    
+            const hostname = globalThis.window.location.hostname;
             if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
                 return new Promise((resolve) => {
                     chrome.storage.sync.get(['whitelist'], (result) => {
@@ -2783,14 +1936,14 @@
     function continueInitialization() {
         try {
             
-            if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
+            if (typeof chrome !== 'undefined' && chrome?.storage?.sync) {
                 chrome.storage.sync.get(['hideBubble', 'showHighlights'], (result) => {
                     if (result) {
                         scannerSettings = { ...scannerSettings, ...result };
-                        console.log('Loaded initial settings from storage:', scannerSettings);
+                        logMessage('Loaded initial settings from storage', 'info');
                         
             
-                        if (bubble && bubble.style) {
+                        if (bubble?.style) {
                             applySettings();
                         }
                     }
@@ -2880,10 +2033,6 @@
         function handleScanError(error) {
             logMessage(`Scanner error: ${error.message}`, 'error');
             
-            
-            scanComplete = true;
-            
-            
             if (bubble) {
                 bubble.innerHTML = '✗<br><span style="font-size: 10px; margin-top: 4px;">ERROR</span>';
                 bubble.style.backgroundColor = '#c53030';
@@ -2891,7 +2040,7 @@
             
             
             const errorResults = {
-                url: window.location.href,
+                url: globalThis.window.location.href,
                 vulnerabilityCount: 0,
                 issues: [],
                 severityCounts: { critical: 0, high: 0, medium: 0, low: 0 },
@@ -2903,13 +2052,13 @@
                     stack: error.stack,
                     timestamp: Date.now(),
                     userAgent: navigator.userAgent,
-                    url: window.location.href
+                    url: globalThis.window.location.href
                 }
             };
             
             
             try {
-                window.dispatchEvent(new CustomEvent('securityScanComplete', {
+                globalThis.window.dispatchEvent(new CustomEvent('securityScanComplete', {
                     detail: errorResults
                 }));
                 logMessage('Error event dispatched successfully', 'info');
@@ -2966,9 +2115,9 @@
         }
 
 
-    window.addEventListener('manualScanTrigger', () => {
+    globalThis.window.addEventListener('manualScanTrigger', () => {
         logMessage('Manual scan triggered, bypassing whitelist', 'info');
-        window.manualScanTriggered = true;
+        globalThis.window.manualScanTriggered = true;
         try {
             initializeScanner();
         } catch (error) {
@@ -2978,7 +2127,7 @@
     });
 
 
-    window.addEventListener('stopScanner', () => {
+    globalThis.window.addEventListener('stopScanner', () => {
         logMessage('Scanner stop signal received', 'info');
         stopScanner();
     });
@@ -2995,7 +2144,7 @@
     }
 
 
-    window.securityScanner = {
+    globalThis.window.securityScanner = {
         clearWhitelist: clearWhitelist,
         checkWhitelistStatus: checkWhitelistStatus,
         triggerManualScan: () => {
@@ -3146,7 +2295,7 @@
                 let reflectionDetails = null;
                 if (name || id) {
             
-                    const urlParams = new URLSearchParams(window.location.search);
+                    const urlParams = new URLSearchParams(globalThis.window.location.search);
                     if ((name && urlParams.has(name)) || (id && urlParams.has(id))) {
                 
                         const paramValue = urlParams.get(name) || urlParams.get(id);
@@ -3206,7 +2355,7 @@
         });
         
 
-        const url = window.location.href;
+        const url = globalThis.window.location.href;
         const sqlPatterns = [
             { pattern: /union\s+select.+from/i, confidence: 'high', description: 'UNION-based SQL injection attempt' },
             { pattern: /'.*or.*'.*=.*'/i, confidence: 'high', description: 'Boolean-based SQL injection with quoted values' },
@@ -3231,7 +2380,7 @@
                 }
                 
         
-                const urlParams = new URLSearchParams(window.location.search);
+                const urlParams = new URLSearchParams(globalThis.window.location.search);
                 const suspiciousParams = [];
                 urlParams.forEach((value, key) => {
                     if (pattern.test(value)) {
@@ -3251,7 +2400,7 @@
                     confidence: confidence,
                     severity: confidence === 'high' ? 'critical' : confidence === 'medium' ? 'high' : 'medium',
                     detailedEvidence: {
-                        fullUrl: window.location.href,
+                        fullUrl: globalThis.window.location.href,
                         matchedPattern: match[0],
                         urlContext: context,
                         suspiciousParameters: suspiciousParams,
@@ -3260,7 +2409,7 @@
                     },
                     codeSnippets: {
                         urlWithHighlighting: formatUrlInjectionContext(url, pattern, match),
-                        fullUrl: window.location.href,
+                        fullUrl: globalThis.window.location.href,
                         extractedParameters: suspiciousParams.map(p => ({
                             parameter: p.parameter,
                             value: p.value,
@@ -3592,7 +2741,7 @@
         }
         
 
-        const urlParams = new URLSearchParams(window.location.search);
+        const urlParams = new URLSearchParams(globalThis.window.location.search);
         if (inputName && urlParams.has(inputName)) {
             const paramValue = urlParams.get(inputName);
             if (paramValue && document.body.innerHTML.includes(paramValue)) {
@@ -3695,11 +2844,8 @@
 
                 
                 const keyPatterns = [
-                    
                     /(?:(?:encryption|crypto|aes|des)[\w]*\s*[=:]\s*['"][a-zA-Z0-9+/]{16,}['"])|(?:key\s*[=:]\s*['"][a-zA-Z0-9+/]{24,}['"])/gi,
-                    
                     /AES\s*\(\s*['"][a-zA-Z0-9+/]{16,}['"]\s*\)/gi,
-                    
                     /(?:createCipher|createDecipher|createHash)\s*\(\s*['"][^'"]{3,}['"]\s*,\s*['"][a-zA-Z0-9+/]{16,}['"]\s*\)/gi
                 ];
 
@@ -3729,146 +2875,13 @@
         }
     }
 
-    function checkPrivacyLeaks() {
-        const evidence = [];
-        
-
-        const images = document.querySelectorAll('img');
-        images.forEach((img, index) => {
-            if (img.width === 1 && img.height === 1) {
-                evidence.push({
-                    type: 'Tracking Pixel',
-                    description: `1x1 tracking pixel detected: ${img.src}`,
-                    location: `Image[${index}]`,
-                    element: img
-                });
-            }
-        });
-
-
-        const scripts = document.querySelectorAll('script[src]');
-        scripts.forEach((script, index) => {
-            const src = script.src.toLowerCase();
-            const fingerprintingDomains = [
-                'google-analytics.com',
-                'googletagmanager.com',
-                'facebook.com',
-                'doubleclick.net',
-                'hotjar.com',
-                'fullstory.com',
-                'mixpanel.com'
-            ];
-
-            fingerprintingDomains.forEach(domain => {
-                if (src.includes(domain)) {
-                    evidence.push({
-                        type: 'Fingerprinting Script',
-                        description: `Potential fingerprinting script from ${domain}`,
-                        location: `Script[${index}]`,
-                        element: script
-                    });
-                }
-            });
-        });
-
-
-        if (navigator.geolocation) {
-            const originalGetCurrentPosition = navigator.geolocation.getCurrentPosition;
-            navigator.geolocation.getCurrentPosition = function(...args) {
-                evidence.push({
-                    type: 'Geolocation Access',
-                    description: 'Page attempts to access user location',
-                    location: 'JavaScript API'
-                });
-                return originalGetCurrentPosition.apply(this, args);
-            };
-        }
-
-
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-            const originalGetUserMedia = navigator.mediaDevices.getUserMedia;
-            navigator.mediaDevices.getUserMedia = function(constraints) {
-                if (constraints.audio) {
-                    evidence.push({
-                        type: 'Microphone Access',
-                        description: 'Page requests microphone access',
-                        location: 'JavaScript API'
-                    });
-                }
-                if (constraints.video) {
-                    evidence.push({
-                        type: 'Camera Access',
-                        description: 'Page requests camera access',
-                        location: 'JavaScript API'
-                    });
-                }
-                return originalGetUserMedia.call(this, constraints);
-            };
-        }
-
-        if (evidence.length > 0) {
-            addIssue('privacy-leaks', 'Privacy and tracking concerns', 'medium', {
-                title: 'Privacy and Tracking Issues',
-                description: 'Potential privacy violations and tracking detected.',
-                impact: 'Medium - User privacy may be compromised',
-                solution: 'Review tracking implementations and ensure proper consent',
-                evidence: evidence
-            });
-        }
-    }
-
-    function checkResourceIntegrity() {
-        const evidence = [];
-        
-
-        const externalScripts = document.querySelectorAll('script[src]');
-        externalScripts.forEach((script, index) => {
-            const src = script.src;
-            if (src && !src.startsWith(window.location.origin) && !script.hasAttribute('integrity')) {
-                evidence.push({
-                    type: 'Missing Subresource Integrity',
-                    description: `External script without integrity check: ${src}`,
-                    location: `Script[${index}]`,
-                    element: script
-                });
-            }
-        });
-
-
-        const externalStyles = document.querySelectorAll('link[rel="stylesheet"][href]');
-        externalStyles.forEach((link, index) => {
-            const href = link.href;
-            if (href && !href.startsWith(window.location.origin) && !link.hasAttribute('integrity')) {
-                evidence.push({
-                    type: 'Missing Subresource Integrity',
-                    description: `External stylesheet without integrity check: ${href}`,
-                    location: `Link[${index}]`,
-                    element: link
-                });
-            }
-        });
-
-        if (evidence.length > 0) {
-            addIssue('resource-integrity', 'Resource integrity issues', 'medium', {
-                title: 'Subresource Integrity Missing',
-                description: 'External resources loaded without integrity verification.',
-                impact: 'Medium - Risk of loading tampered external resources',
-                solution: 'Add integrity attributes to all external scripts and stylesheets',
-                evidence: evidence
-            });
-        }
-    }
-
-
-    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
+    if (typeof chrome !== 'undefined' && chrome?.runtime?.onMessage) {
         chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             if (message.type === 'CHECK_DYNAMIC_THREATS') {
         
                 checkAdvancedContentSecurityPolicy();
                 checkInjectionVulnerabilities();
                 checkCryptographicImplementation();
-                checkPrivacyLeaks();
-                checkResourceIntegrity();
                 sendResponse({ status: 'checked' });
                 return true;
             }
@@ -3877,7 +2890,6 @@
 
 
     let monitoringInterval = null;
-    let lastAPIKeyCheck = 0;
     
     function startContinuousMonitoring() {
 
@@ -3895,11 +2907,6 @@
 
     function performContinuousChecks() {
         try {
-    
-            const currentTime = Date.now();
-    
-            checkDynamicContentChanges();
-            checkNewExternalResources();
             checkSuspiciousDOMChanges();
             
         } catch (error) {
@@ -3907,75 +2914,6 @@
         }
     }
 
-    function checkDynamicContentChanges() {
-
-        const scripts = document.querySelectorAll('script');
-        const currentScriptCount = scripts.length;
-        
-        if (window._lastScriptCount && currentScriptCount > window._lastScriptCount) {
-            logMessage(`New script detected - total scripts increased from ${window._lastScriptCount} to ${currentScriptCount}`, 'warn');
-            
-    
-            for (let i = window._lastScriptCount; i < currentScriptCount; i++) {
-                if (scripts[i] && scripts[i].textContent) {
-                    checkScriptForAPIKeys(scripts[i], i);
-                }
-            }
-        }
-        window._lastScriptCount = currentScriptCount;
-    }
-
-    function checkScriptForAPIKeys(script, index) {
-        const apiKeyPatterns = [
-            { pattern: /AKIA[0-9A-Z]{16}/, type: 'AWS Access Key' },
-            { pattern: /AIza[0-9A-Za-z\\-_]{35}/, type: 'Google API Key' },
-            { pattern: /ghp_[a-zA-Z0-9]{36}/, type: 'GitHub Token' },
-            { pattern: /sk_live_[0-9a-zA-Z]{24}/, type: 'Stripe Live Key' },
-            { pattern: /(?:api[_-]?key|token)['\"\s]*[:=]['\"\s]*[a-zA-Z0-9\-_]{16,}/, type: 'Generic API Key' }
-        ];
-
-        apiKeyPatterns.forEach(({pattern, type}) => {
-            if (pattern.test(script.textContent)) {
-                logMessage(`API key detected in dynamically added script: ${type}`, 'error');
-                addIssue(`dynamic-api-key-${index}`, `${type} detected in dynamic script`, 'critical', {
-                    title: 'Dynamic API Key Exposure',
-                    description: `${type} found in dynamically added script content.`,
-                    impact: 'Critical - API key exposed in dynamic content',
-                    solution: 'Remove hardcoded credentials from dynamic scripts',
-                    evidence: [{
-                        type: 'Dynamic Script',
-                        description: `Found ${type} in script tag`,
-                        location: `Dynamic Script[${index}]`
-                    }]
-                });
-            }
-        });
-    }
-
-    function checkNewExternalResources() {
-
-        const externalScripts = document.querySelectorAll('script[src]:not([integrity])');
-        const externalStyles = document.querySelectorAll('link[rel="stylesheet"][href]:not([integrity])');
-        
-        const currentExternalCount = externalScripts.length + externalStyles.length;
-        
-        if (window._lastExternalCount && currentExternalCount > window._lastExternalCount) {
-            logMessage(`New external resource detected without integrity check`, 'warn');
-            
-            addIssue('dynamic-external-resource', 'New external resource without integrity', 'medium', {
-                title: 'Dynamic External Resource',
-                description: 'New external resource loaded without subresource integrity.',
-                impact: 'Medium - Risk of loading tampered external content',
-                solution: 'Add integrity attributes to external resources',
-                evidence: [{
-                    type: 'External Resource',
-                    description: 'External resource added dynamically',
-                    location: 'DOM'
-                }]
-            });
-        }
-        window._lastExternalCount = currentExternalCount;
-    }
 
     function checkSuspiciousDOMChanges() {
 
@@ -4102,19 +3040,9 @@
         try {
             logMessage('Stopping scanner...', 'info');
             
-        
-            scanComplete = true;
-            
-        
-            if (container && container.parentNode) {
-                container.parentNode.removeChild(container);
-            }
-            if (bubble && bubble.parentNode) {
-                bubble.parentNode.removeChild(bubble);
-            }
-            if (modal && modal.parentNode) {
-                modal.parentNode.removeChild(modal);
-            }
+            container?.remove();
+            bubble?.remove();
+            modal?.remove();
             
         
             if (monitoringInterval) {
