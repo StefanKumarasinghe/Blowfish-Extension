@@ -147,22 +147,6 @@ class PopupManager {
     }
 
     
-    applyTheme(theme) {
-        const isLight = theme === 'light';
-        document.body.classList.toggle('theme-light', isLight);
-        if (this.elements.themeToggle) {
-            this.elements.themeToggle.classList.toggle('active', isLight);
-            this.elements.themeToggle.setAttribute('aria-checked', isLight ? 'true' : 'false');
-        }
-    }
-
-    async toggleTheme() {
-        const isLight = document.body.classList.contains('theme-light');
-        const newTheme = isLight ? 'dark' : 'light';
-        await chrome.storage.sync.set({ theme: newTheme });
-        this.applyTheme(newTheme);
-    }
-
     
     async loadScanResults() {
         try {
